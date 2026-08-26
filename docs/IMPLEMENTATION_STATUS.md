@@ -2,11 +2,11 @@
 
 Date: 2026-08-26
 
-Status: v1 implementation complete and merged to `main` at `adc6c25865f594dec60de38afbd820f044555d8d`.
+Status: v1.0.0 is the released baseline. The current v1.0.1 work corrects native desktop UX and Windows integration while preserving the existing runtime architecture. The v1.0.1 release is not considered complete until its branch CI, post-merge CI, and release assets are verified.
 
 ADR 0008 is authoritative for authentication architecture and supersedes ADR 0007 plus all Shared OAuth/Auth Gateway language from earlier planning.
 
-## Implemented
+## Current architecture
 
 ### Runtime and persistence
 
@@ -53,20 +53,22 @@ ADR 0008 is authoritative for authentication architecture and supersedes ADR 000
 
 ### Desktop and local UX
 
-- Native Gio desktop control surface.
-- System tray integration.
-- Server list/status/lifecycle controls.
-- Server editor for all three transports, environment values, and secret references.
-- Manager tunnel and runtime credential settings.
-- Native secret entry.
+- Native Gio is the only management UI; there is no management Web UI.
+- System-tray-first integration: minimize/close-to-tray removes the native window from the taskbar while the process remains active.
+- Start-minimized starts directly in the tray without requiring a visible management window.
+- Tray/second-instance Open Manager restores a native Gio window.
+- The Servers page begins with a built-in, non-deletable `Manager MCP` row that is not persisted in `servers.json`.
+- Server list/status/lifecycle controls for downstream entries.
+- Server editor for all three transports, environment values, and custom secret references.
+- Dedicated masked value-only `OpenAI Runtime API Key` field backed by the fixed internal reference `secret://openai/runtime/default`.
+- Downstream tunnel runtimes use the Manager Runtime API key by default.
+- Windows secret storage uses native Current User DPAPI rather than PowerShell cryptography access.
 - Tunnel-client check/install/rollback controls.
 - Structured live logs with search, level filter, clear, text export, and JSONL export.
-- Launch-at-login, start-minimized, tray, close behavior, exit-confirmation, logging, and appearance settings.
-- App-controlled native title-bar close behavior.
-- Coordinated explicit-exit confirmation from window and tray.
-- Advanced loopback web UI retained as a secondary surface.
-- Same-site per-process session protection for advanced-web mutation endpoints.
+- Launch-at-login, start-hidden-in-tray, close behavior, exit-confirmation, logging, and appearance settings.
+- App-controlled native title-bar close/minimize behavior and coordinated explicit exit confirmation.
 - Runtime disk-log reconfiguration and bounded rotation.
+- Windows release GUI binaries use the GUI subsystem so the desktop launch does not open a console window.
 
 ### Authentication architecture
 
@@ -76,25 +78,24 @@ ADR 0008 is authoritative for authentication architecture and supersedes ADR 000
 - Each MCP server owns its own authentication needs.
 - OpenAI Runtime API keys are used solely by `tunnel-client` for Secure MCP Tunnel control-plane access.
 
-## Final verification
+## Verification gates for v1.0.1
 
-PR #2 and the post-merge `main` build both passed the complete repository CI matrix on the final code tree:
+The release remains gated on:
 
-- Committed `go.mod` / `go.sum` are tidy with zero generated diff.
-- `go test ./...` succeeds.
-- `go vet ./...` succeeds.
-- Native desktop build succeeds on Ubuntu.
-- Native desktop build succeeds on Windows.
-- Native desktop build succeeds on macOS.
-- Headless-compatible build succeeds for windows/amd64.
-- Headless-compatible build succeeds for windows/arm64.
-- Headless-compatible build succeeds for linux/amd64.
-- Headless-compatible build succeeds for linux/arm64.
-- Headless-compatible build succeeds for darwin/amd64.
-- Headless-compatible build succeeds for darwin/arm64.
+- `go mod tidy` producing no diff to committed `go.mod` / `go.sum`.
+- `go test ./...`.
+- `go vet ./...`.
+- Native Gio desktop builds on Ubuntu, Windows, and macOS.
+- Windows native DPAPI round-trip test.
+- Headless-compatible builds for Windows/Linux/macOS on amd64 and arm64.
+- Post-merge CI on `main`.
+- Successful native release builds for Windows AMD64/ARM64, Linux AMD64/ARM64, and macOS AMD64/ARM64.
+- Release changelog, source archives, and `SHA256SUMS.txt` verification.
 
-The implementation merge commit is `adc6c25865f594dec60de38afbd820f044555d8d`. The successful PR validation run was GitHub Actions run `33018813016`; the successful post-merge validation run was `33018929266`.
+## v1.0.0 baseline verification
+
+The earlier v1.0.0 implementation passed the repository CI matrix before the native-only UX corrections. Those historical results remain baseline evidence only and do not substitute for v1.0.1 validation.
 
 ## Deliberate external acceptance boundary
 
-Automated CI does not create or consume real OpenAI Secure MCP Tunnels because the repository contains no production Runtime API key or permanent tunnel resources. Real ChatGPT Developer Plugin discovery and end-to-end tunnel traffic are release/operator acceptance tests using disposable credentials and tunnels.
+Automated CI does not create or consume real OpenAI Secure MCP Tunnels because the repository contains no production Runtime API key or permanent tunnel resources. Real ChatGPT Developer Plugin discovery and end-to-end tunnel traffic are release/operator acceptance tests using suitable credentials and tunnels.

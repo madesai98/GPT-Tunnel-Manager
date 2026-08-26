@@ -17,19 +17,24 @@ GPT Tunnel Manager is a portable Go desktop application for supervising local MC
 
 ## Desktop application
 
-The normal executable starts a native Gio desktop window and, when enabled, a system tray icon. The native UI provides:
+The normal executable is a native Gio desktop application with a notification-area/system-tray icon. There is no browser-based management UI.
 
-- Server status and lifecycle controls.
-- Add/edit/delete Server Entries.
+The Servers page always begins with a built-in `Manager MCP` row. That row is not a normal Server Entry, cannot be deleted, and reports the Manager tunnel state with Manager-specific controls. Configured downstream Server Entries follow it.
+
+The native UI provides:
+
+- Manager MCP and downstream server status/lifecycle controls.
+- Add/edit/delete controls for downstream Server Entries only.
 - Stdio, Managed HTTP, and External HTTP configuration.
-- Environment and secret-reference configuration.
-- Manager tunnel and runtime-key reference configuration.
-- Secret-store entry.
+- Environment and custom secret-reference configuration.
+- A dedicated masked `OpenAI Runtime API Key` field. The user enters only the key value; the fixed internal credential reference is not entered manually.
+- Downstream tunnel configuration that uses the Manager Runtime API key by default.
+- Custom-secret storage for downstream MCP/environment secrets.
 - Tunnel-client update and rollback controls.
 - Structured log filtering, clearing, and text/JSONL export.
-- Launch-at-login, start-minimized, tray, close behavior, exit confirmation, disk logging, and appearance settings.
+- Launch-at-login, start-hidden-in-tray, close behavior, explicit exit confirmation, disk logging, and appearance settings.
 
-A loopback-only advanced web UI is also available from Settings or the tray. Its mutation routes are protected with a per-process same-site local session token. The Manager MCP rejects browser-originated requests entirely.
+Minimize and the configured close-to-tray behavior remove the native window from the taskbar while the Manager process, tray icon, tunnels, and owned servers continue running. `Open Manager` from the tray or a second-launch focus request restores a native Gio window. Explicit Exit stops owned MCP/tunnel processes and removes the tray icon.
 
 Run from source:
 
@@ -58,9 +63,9 @@ printf '%s' "$CONTROL_PLANE_API_KEY" | tunnel-manager secret put secret://openai
 
 1. Create one Manager tunnel in OpenAI Platform and one tunnel for each MCP server you want to expose.
 2. Create a Restricted Runtime API key with Tunnels Read + Use.
-3. Start GPT Tunnel Manager and store the key under a `secret://...` reference in Settings.
-4. Configure the Manager Tunnel ID and credential reference.
-5. Add Server Entries. Create one ChatGPT Developer Mode plugin per Server Entry.
+3. Start GPT Tunnel Manager. In Settings, paste only the Runtime API key value into `OpenAI Runtime API Key` and choose `Store API Key`.
+4. Configure the Manager Tunnel ID. The Manager credential reference is fixed internally as `secret://openai/runtime/default`; the UI does not ask you to type it.
+5. Add Server Entries. Their tunnel runtimes use the Manager Runtime API key by default. Create one ChatGPT Developer Mode plugin per Server Entry.
 6. Put this marker in every participating Developer Plugin description:
 
 ```text
@@ -73,12 +78,14 @@ Follow the GPT Tunnel Manager Lifecycle Skill before using this plugin.
 
 ## Secret storage
 
-- Windows: DPAPI scoped to the current user; only ciphertext is stored under Portable Root.
+- Windows: native DPAPI scoped to the current user; only ciphertext is stored under Portable Root.
 - macOS: Keychain via the system `security` utility.
 - Linux: Secret Service via `secret-tool`; unavailable or locked keyrings fail closed rather than storing plaintext.
 - Controlled deployments may use the deterministic `GTM_SECRET_<hash>` environment override.
 
 Configuration files contain secret references, never secret values. Secrets loaded at runtime are registered with the central redactor before related child output is retained.
+
+The known OpenAI Runtime API key uses the fixed internal reference `secret://openai/runtime/default`. Arbitrary `secret://...` references are intended for custom downstream secrets rather than for normal Manager-key setup.
 
 ## tunnel-client
 
@@ -114,4 +121,6 @@ CI verifies the native desktop build on Linux, Windows, and macOS and headless-c
 - darwin/amd64
 - darwin/arm64
 
-See `docs/IMPLEMENTATION_PLAN.md`, `docs/IMPLEMENTATION_STATUS.md`, and ADR 0008 for the final v1 architecture.
+Windows CI also exercises the native DPAPI secret-store round trip. Release Windows GUI binaries are linked with the Windows GUI subsystem so the normal desktop launch does not open a console window.
+
+See `docs/IMPLEMENTATION_PLAN.md`, `docs/IMPLEMENTATION_STATUS.md`, and ADR 0008 for the current architecture.

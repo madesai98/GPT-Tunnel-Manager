@@ -56,16 +56,16 @@ type desktopUI struct {
 	exportText widget.Clickable
 	exportJSON widget.Clickable
 
-	confirmingExit bool
-	dontAskAgain   widget.Bool
-	cancelExit     widget.Clickable
-	confirmExit    widget.Clickable
+	confirmingExit  bool
+	resetExitChoice bool
+	dontAskAgain    widget.Bool
+	cancelExit      widget.Clickable
+	confirmExit     widget.Clickable
 
 	mu           sync.RWMutex
 	busy         bool
 	message      string
 	windowHidden bool
-	hiding       bool
 	exiting      bool
 
 	showReq  chan struct{}
@@ -74,10 +74,9 @@ type desktopUI struct {
 
 func oneLine() widget.Editor { return widget.Editor{SingleLine: true} }
 
-func newDesktopUI(core *coreapp.App, win *gioapp.Window) *desktopUI {
+func newDesktopUI(core *coreapp.App) *desktopUI {
 	u := &desktopUI{
 		core:         core,
-		win:          win,
 		th:           material.NewTheme(),
 		page:         "servers",
 		list:         widget.List{List: layout.List{Axis: layout.Vertical}},
@@ -96,8 +95,8 @@ func newDesktopUI(core *coreapp.App, win *gioapp.Window) *desktopUI {
 	return u
 }
 
-func (u *desktopUI) applyWindowOptions() {
-	u.win.Option(
+func (u *desktopUI) applyWindowOptions(win *gioapp.Window) {
+	win.Option(
 		gioapp.Title("GPT Tunnel Manager"),
 		gioapp.Size(unit.Dp(1120), unit.Dp(760)),
 		gioapp.MinSize(unit.Dp(780), unit.Dp(520)),
@@ -107,16 +106,11 @@ func (u *desktopUI) applyWindowOptions() {
 
 func runDesktop(core *coreapp.App, setFocus func(func())) error {
 	ready := make(chan *desktopUI, 1)
+	done := make(chan error, 1)
 	go func() {
-		win := new(gioapp.Window)
-		u := newDesktopUI(core, win)
-		u.applyWindowOptions()
+		u := newDesktopUI(core)
 		ready <- u
-		if err := u.loop(); err != nil {
-			fmt.Fprintln(os.Stderr, "desktop:", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
+		done <- u.loop()
 	}()
 
 	u := <-ready
@@ -126,13 +120,40 @@ func runDesktop(core *coreapp.App, setFocus func(func())) error {
 
 	startTray, stopTray := systray.RunWithExternalLoop(u.trayReady, func() {})
 	startTray()
-	defer func() {
+	go func() {
+		err := <-done
 		close(u.trayStop)
 		stopTray()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "desktop:", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}()
 
 	gioapp.Main()
 	return nil
+}
+
+func (u *desktopUI) currentWindow() *gioapp.Window {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return u.win
+}
+
+func (u *desktopUI) setWindow(win *gioapp.Window) {
+	u.mu.Lock()
+	u.win = win
+	u.mu.Unlock()
+}
+
+func (u *desktopUI) coreDone() bool {
+	select {
+	case <-u.core.Done():
+		return true
+	default:
+		return false
+	}
 }
 
 func (u *desktopUI) loop() error {
@@ -142,30 +163,29 @@ func (u *desktopUI) loop() error {
 		for {
 			select {
 			case <-u.core.Done():
-				u.mu.RLock()
-				hidden := u.windowHidden
-				u.mu.RUnlock()
-				if !hidden {
-					u.win.Perform(system.ActionClose)
+				if win := u.currentWindow(); win != nil {
+					win.Perform(system.ActionClose)
 				}
 				return
 			case <-ticker.C:
-				u.mu.RLock()
-				hidden := u.windowHidden
-				u.mu.RUnlock()
-				if !hidden {
-					u.win.Invalidate()
+				if win := u.currentWindow(); win != nil {
+					win.Invalidate()
 				}
 			}
 		}
 	}()
 
-	var ops op.Ops
 	for {
 		u.mu.RLock()
 		hidden := u.windowHidden
+		exiting := u.exiting
 		u.mu.RUnlock()
+
 		if hidden {
+			if exiting {
+				<-u.core.Done()
+				return nil
+			}
 			select {
 			case <-u.core.Done():
 				return nil
@@ -173,50 +193,85 @@ func (u *desktopUI) loop() error {
 				u.mu.Lock()
 				if u.exiting {
 					u.mu.Unlock()
+					<-u.core.Done()
 					return nil
 				}
 				u.windowHidden = false
-				u.hiding = false
 				u.mu.Unlock()
-				u.applyWindowOptions()
 			}
 		}
 
-		switch event := u.win.Event().(type) {
+		if err := u.runWindow(); err != nil {
+			return err
+		}
+	}
+}
+
+func (u *desktopUI) runWindow() error {
+	win := new(gioapp.Window)
+	u.applyWindowOptions(win)
+	u.deco = widget.Decorations{}
+	u.setWindow(win)
+	defer u.setWindow(nil)
+
+	var ops op.Ops
+	for {
+		u.handleShowRequest(win)
+
+		switch event := win.Event().(type) {
 		case gioapp.ConfigEvent:
 			u.deco.Maximized = event.Config.Mode == gioapp.Maximized
 		case gioapp.DestroyEvent:
 			u.mu.Lock()
-			wasHiding := u.hiding
-			u.hiding = false
+			requestedHidden := u.windowHidden
 			exiting := u.exiting
 			u.windowHidden = true
 			u.mu.Unlock()
 
-			if exiting {
-				u.core.RequestShutdown()
-				<-u.core.Done()
+			if event.Err != nil {
 				return event.Err
 			}
-			if wasHiding {
-				continue
+			if u.coreDone() {
+				return nil
+			}
+			if exiting || requestedHidden {
+				return nil
 			}
 
 			cfg := u.core.ManagerConfig()
 			if cfg.General.CloseBehavior == "exit" {
 				if cfg.General.ConfirmExit {
+					u.mu.Lock()
 					u.confirmingExit = true
-					u.dontAskAgain.Value = false
-					u.signalShow()
+					u.resetExitChoice = true
+					u.windowHidden = false
+					u.mu.Unlock()
 				} else {
 					u.shutdownNow()
 				}
 			}
+			return nil
 		case gioapp.FrameEvent:
 			gtx := gioapp.NewContext(&ops, event)
 			u.layout(gtx)
 			event.Frame(gtx.Ops)
 		}
+	}
+}
+
+func (u *desktopUI) handleShowRequest(win *gioapp.Window) {
+	u.mu.RLock()
+	hidden := u.windowHidden
+	u.mu.RUnlock()
+	if hidden {
+		return
+	}
+	select {
+	case <-u.showReq:
+		win.Option(gioapp.Windowed.Option())
+		win.Perform(system.ActionRaise)
+		win.Invalidate()
+	default:
 	}
 }
 
@@ -229,31 +284,35 @@ func (u *desktopUI) signalShow() {
 
 func (u *desktopUI) showWindow() {
 	u.mu.RLock()
-	hidden := u.windowHidden
 	exiting := u.exiting
+	hidden := u.windowHidden
+	win := u.win
 	u.mu.RUnlock()
 	if exiting {
 		return
 	}
-	if hidden {
-		u.signalShow()
+	if !hidden && win != nil {
+		win.Option(gioapp.Windowed.Option())
+		win.Perform(system.ActionRaise)
+		win.Invalidate()
 		return
 	}
-	u.win.Option(gioapp.Windowed.Option())
-	u.win.Perform(system.ActionRaise)
-	u.win.Invalidate()
+	u.signalShow()
+	if win != nil {
+		win.Invalidate()
+	}
 }
 
 func (u *desktopUI) hideToTray() {
 	u.mu.Lock()
-	if u.windowHidden || u.exiting || u.hiding {
+	if u.windowHidden || u.exiting || u.win == nil {
 		u.mu.Unlock()
 		return
 	}
-	u.hiding = true
+	win := u.win
 	u.windowHidden = true
 	u.mu.Unlock()
-	u.win.Perform(system.ActionClose)
+	win.Perform(system.ActionClose)
 }
 
 func (u *desktopUI) requestClose() {
@@ -266,8 +325,10 @@ func (u *desktopUI) requestClose() {
 
 func (u *desktopUI) requestExit() {
 	if u.core.ManagerConfig().General.ConfirmExit {
+		u.mu.Lock()
 		u.confirmingExit = true
-		u.dontAskAgain.Value = false
+		u.resetExitChoice = true
+		u.mu.Unlock()
 		u.showWindow()
 		return
 	}
@@ -283,22 +344,31 @@ func (u *desktopUI) shutdownNow() {
 	u.exiting = true
 	u.busy = true
 	u.message = "Shutting down…"
-	hidden := u.windowHidden
+	win := u.win
 	u.mu.Unlock()
-	if !hidden {
-		u.win.Invalidate()
+	if win != nil {
+		win.Invalidate()
 	}
 
 	go func() {
 		u.core.RequestShutdown()
 		<-u.core.Done()
-		u.mu.RLock()
-		hidden := u.windowHidden
-		u.mu.RUnlock()
-		if !hidden {
-			u.win.Perform(system.ActionClose)
+		if win := u.currentWindow(); win != nil {
+			win.Perform(system.ActionClose)
 		}
 	}()
+}
+
+func (u *desktopUI) perform(action system.Action) {
+	if win := u.currentWindow(); win != nil {
+		win.Perform(action)
+	}
+}
+
+func (u *desktopUI) invalidate() {
+	if win := u.currentWindow(); win != nil {
+		win.Invalidate()
+	}
 }
 
 func (u *desktopUI) layout(gtx layout.Context) layout.Dimensions {
@@ -308,14 +378,22 @@ func (u *desktopUI) layout(gtx layout.Context) layout.Dimensions {
 		u.hideToTray()
 	}
 	if actions&system.ActionMaximize != 0 {
-		u.win.Perform(system.ActionMaximize)
+		u.perform(system.ActionMaximize)
 	}
 	if actions&system.ActionUnmaximize != 0 {
-		u.win.Perform(system.ActionUnmaximize)
+		u.perform(system.ActionUnmaximize)
 	}
 	if actions&system.ActionClose != 0 {
 		u.requestClose()
 	}
+
+	u.mu.Lock()
+	if u.resetExitChoice {
+		u.dontAskAgain.Value = false
+		u.resetExitChoice = false
+	}
+	confirmingExit := u.confirmingExit
+	u.mu.Unlock()
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(material.Decorations(
@@ -332,7 +410,7 @@ func (u *desktopUI) layout(gtx layout.Context) layout.Dimensions {
 						return layout.Spacer{Height: unit.Dp(10)}.Layout(gtx)
 					}),
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-						if u.confirmingExit {
+						if confirmingExit {
 							return u.exitDialog(gtx)
 						}
 						return u.body(gtx)
@@ -346,7 +424,9 @@ func (u *desktopUI) layout(gtx layout.Context) layout.Dimensions {
 
 func (u *desktopUI) exitDialog(gtx layout.Context) layout.Dimensions {
 	for u.cancelExit.Clicked(gtx) {
+		u.mu.Lock()
 		u.confirmingExit = false
+		u.mu.Unlock()
 	}
 	for u.confirmExit.Clicked(gtx) {
 		if u.dontAskAgain.Value {
@@ -354,7 +434,9 @@ func (u *desktopUI) exitDialog(gtx layout.Context) layout.Dimensions {
 			cfg.General.ConfirmExit = false
 			_ = u.core.SaveManager(context.Background(), cfg)
 		}
+		u.mu.Lock()
 		u.confirmingExit = false
+		u.mu.Unlock()
 		u.shutdownNow()
 	}
 
@@ -391,7 +473,7 @@ func (u *desktopUI) header(gtx layout.Context) layout.Dimensions {
 		u.loadSettings()
 	}
 	for u.refresh.Clicked(gtx) {
-		u.win.Invalidate()
+		u.invalidate()
 	}
 	for u.exit.Clicked(gtx) {
 		u.requestExit()
@@ -458,22 +540,16 @@ func (u *desktopUI) async(label string, fn func() error) {
 		} else if u.message == label {
 			u.message = "Done: " + label
 		}
-		hidden := u.windowHidden
 		u.mu.Unlock()
-		if !hidden {
-			u.win.Invalidate()
-		}
+		u.invalidate()
 	}()
 }
 
 func (u *desktopUI) setMessage(message string) {
 	u.mu.Lock()
 	u.message = message
-	hidden := u.windowHidden
 	u.mu.Unlock()
-	if !hidden {
-		u.win.Invalidate()
-	}
+	u.invalidate()
 }
 
 func (u *desktopUI) trayReady() {
