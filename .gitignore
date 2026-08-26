@@ -1,0 +1,6 @@
+config/
+data/
+tools/
+logs/
+*.exe
+.DS_Store
