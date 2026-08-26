@@ -14,6 +14,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
+	coreapp "github.com/madesai98/GPT-Tunnel-Manager/internal/app"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/config"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/marker"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/servers"
@@ -29,12 +30,12 @@ type rowActions struct {
 }
 
 type serverForm struct {
-	id string
+	id   string
+	cred string
 
 	name      widget.Editor
 	plugin    widget.Editor
 	tunnel    widget.Editor
-	cred      widget.Editor
 	exe       widget.Editor
 	cwd       widget.Editor
 	url       widget.Editor
@@ -61,7 +62,6 @@ func (u *desktopUI) initServerForm() {
 		&u.form.name,
 		&u.form.plugin,
 		&u.form.tunnel,
-		&u.form.cred,
 		&u.form.exe,
 		&u.form.cwd,
 		&u.form.url,
@@ -76,12 +76,12 @@ func (u *desktopUI) initServerForm() {
 func (u *desktopUI) serversPage(gtx layout.Context) layout.Dimensions {
 	entries := u.core.Entries()
 	snapshots := u.core.Snapshots()
+	manager := u.core.ManagerSnapshot()
 	byID := make(map[string]servers.Snapshot, len(snapshots))
 	for _, snapshot := range snapshots {
 		byID[snapshot.ServerID] = snapshot
 	}
 
-	// A persistent add button is stored in the zero-ID row action entry.
 	addActions := u.row("")
 	for addActions.edit.Clicked(gtx) {
 		u.editServer(config.ServerEntry{})
@@ -90,7 +90,7 @@ func (u *desktopUI) serversPage(gtx layout.Context) layout.Dimensions {
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-				layout.Flexed(1, material.Body1(u.th, fmt.Sprintf("%d configured Server Entries", len(entries))).Layout),
+				layout.Flexed(1, material.Body1(u.th, fmt.Sprintf("Manager MCP + %d configured Server Entries", len(entries))).Layout),
 				layout.Rigid(material.Button(u.th, &addActions.edit, "Add Server").Layout),
 			)
 		}),
@@ -98,12 +98,56 @@ func (u *desktopUI) serversPage(gtx layout.Context) layout.Dimensions {
 			return layout.Spacer{Height: unit.Dp(8)}.Layout(gtx)
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			return u.list.Layout(gtx, len(entries), func(gtx layout.Context, index int) layout.Dimensions {
-				entry := entries[index]
+			return u.list.Layout(gtx, len(entries)+1, func(gtx layout.Context, index int) layout.Dimensions {
+				if index == 0 {
+					return u.managerRow(gtx, manager)
+				}
+				entry := entries[index-1]
 				return u.serverRow(gtx, entry, byID[entry.ID])
 			})
 		}),
 	)
+}
+
+func (u *desktopUI) managerRow(gtx layout.Context, snapshot coreapp.ManagerSnapshot) layout.Dimensions {
+	actions := u.row("__manager_mcp__")
+	for actions.restart.Clicked(gtx) {
+		u.core.RestartManagerTunnel()
+		u.setMessage("Manager tunnel restart requested.")
+	}
+	for actions.edit.Clicked(gtx) {
+		u.page = "settings"
+		u.loadSettings()
+	}
+
+	state := snapshot.State
+	if state == "" {
+		state = "starting"
+	}
+	tunnelID := snapshot.TunnelID
+	if tunnelID == "" {
+		tunnelID = "not configured"
+	}
+	detail := fmt.Sprintf("system · %s · tunnel %s · ready %v", state, tunnelID, snapshot.Ready)
+	if snapshot.Error != "" {
+		detail += " · " + snapshot.Error
+	}
+
+	return layout.Inset{Bottom: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(material.Body1(u.th, "Manager MCP").Layout),
+			layout.Rigid(material.Caption(u.th, detail).Layout),
+			layout.Rigid(material.Caption(u.th, snapshot.MCPURL+" · built-in, cannot be deleted").Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{}.Layout(gtx,
+						layout.Rigid(buttonInset(u.th, &actions.restart, "Restart Tunnel")),
+						layout.Rigid(buttonInset(u.th, &actions.edit, "Settings")),
+					)
+				})
+			}),
+		)
+	})
 }
 
 func (u *desktopUI) row(id string) *rowActions {
@@ -176,10 +220,10 @@ func (u *desktopUI) lifecycle(id, action string) {
 func (u *desktopUI) editServer(entry config.ServerEntry) {
 	form := &u.form
 	form.id = entry.ID
+	form.cred = entry.Tunnel.RuntimeCredentialRef
 	form.name.SetText(entry.Name)
 	form.plugin.SetText(entry.ChatGPTPluginName)
 	form.tunnel.SetText(entry.Tunnel.TunnelID)
-	form.cred.SetText(entry.Tunnel.RuntimeCredentialRef)
 	form.enabled.Value = entry.Enabled || entry.ID == ""
 
 	modes := []config.ServerMode{config.ModeManaged, config.ModeAlwaysOn, config.ModeManual}
@@ -284,7 +328,7 @@ func (u *desktopUI) serverEditor(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(editorLine(u.th, &form.name, "Name")),
 			layout.Rigid(editorLine(u.th, &form.plugin, "ChatGPT Developer Plugin name")),
 			layout.Rigid(editorLine(u.th, &form.tunnel, "Tunnel ID")),
-			layout.Rigid(editorLine(u.th, &form.cred, "Runtime credential ref (blank = global)")),
+			layout.Rigid(material.Caption(u.th, "OpenAI Runtime API key: uses the Manager API key from Settings.").Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				if form.transport == 2 {
 					return layout.Dimensions{}
@@ -436,7 +480,7 @@ func (u *desktopUI) formEntry() (config.ServerEntry, error) {
 		Mode:              []config.ServerMode{config.ModeManaged, config.ModeAlwaysOn, config.ModeManual}[form.mode],
 		Tunnel: config.TunnelConfig{
 			TunnelID:             strings.TrimSpace(form.tunnel.Text()),
-			RuntimeCredentialRef: strings.TrimSpace(form.cred.Text()),
+			RuntimeCredentialRef: form.cred,
 		},
 		Environment: config.EnvironmentConfig{Values: environment, SecretRefs: secretEnvironment},
 		Runtime: config.RuntimeConfig{

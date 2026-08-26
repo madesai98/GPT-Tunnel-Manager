@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version, for example v1.0.0
+        description: Release version, for example v1.0.1
         required: true
-        default: v1.0.0
+        default: v1.0.1
   push:
     branches:
       - main
@@ -104,8 +104,12 @@ jobs:
           BASENAME="GPT-Tunnel-Manager-${VERSION}-${OS}-${ARCH}"
           mkdir -p "stage/$BASENAME"
           EXT=""
-          if [[ "$OS" == windows ]]; then EXT=.exe; fi
-          go build -trimpath -ldflags='-s -w' -o "stage/$BASENAME/tunnel-manager${EXT}" ./cmd/tunnel-manager
+          LDFLAGS="-s -w"
+          if [[ "$OS" == windows ]]; then
+            EXT=.exe
+            LDFLAGS="$LDFLAGS -H=windowsgui"
+          fi
+          go build -trimpath -ldflags="$LDFLAGS" -o "stage/$BASENAME/tunnel-manager${EXT}" ./cmd/tunnel-manager
           cp README.md "stage/$BASENAME/README.md"
           if [[ -d assets/lifecycle-skill ]]; then
             mkdir -p "stage/$BASENAME/lifecycle-skill"
@@ -165,11 +169,11 @@ jobs:
             echo
             echo "## Highlights"
             echo
-            echo "- Portable Go desktop application for supervising MCP servers through separate OpenAI Secure MCP Tunnels."
-            echo "- Native Gio desktop UI and system tray on Windows, Linux, and macOS."
+            echo "- Native Gio desktop application only; there is no browser-based administration UI."
+            echo "- System-tray-first desktop behavior on Windows, Linux, and macOS."
+            echo "- Dedicated value-only OpenAI Runtime API key field backed by platform secret storage."
             echo "- Always On, Managed, and Manual lifecycle modes with Stdio, Managed HTTP, and External HTTP transports."
             echo "- Dedicated Manager MCP exposing exactly four lifecycle tools: get_status, start, restart, and shutdown."
-            echo "- Platform secret storage, log redaction/rotation, tunnel-client verification/update/rollback, and packaged lifecycle skill."
             echo "- No additional Manager/plugin authentication layer; each downstream MCP server owns its own authentication."
             echo
             echo "## Release binaries"

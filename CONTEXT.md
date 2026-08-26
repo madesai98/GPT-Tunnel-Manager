@@ -69,6 +69,8 @@ The loopback MCP service built into Tunnel Manager. It exposes exactly:
 
 Lifecycle mutation tools accept only immutable configured Server IDs. They never accept executable paths, arguments, environment variables, secret values, or Tunnel IDs.
 
+The native Servers page also displays a built-in `Manager MCP` row first. It is a UI representation of the Manager service, not a persisted Server Entry, has no ordinary Server ID, and cannot be deleted.
+
 **Developer Plugin**  
 A ChatGPT Developer Mode plugin connected to one tunnel. Each MCP Server has its own plugin; Tunnel Manager does not merge server tools into the Manager plugin.
 
@@ -92,17 +94,17 @@ The immutable Server ID is authoritative; plugin display names are informational
 **Lifecycle Skill**  
 The separately installed generic ChatGPT Skill in `assets/lifecycle-skill/SKILL.md`. It reads a plugin's Lifecycle Marker, checks the Manager MCP, applies mode-specific lifecycle behavior, waits for Ready, and only then invokes the target plugin. It contains no registry of server-specific names or IDs.
 
-## Authentication boundary
+## Authentication and credential boundary
 
 GPT Tunnel Manager v1 adds **no Manager-layer authentication** to the Manager MCP or participating server tunnels.
 
 - Each MCP server is responsible for any authentication its own service requires.
 - The Manager MCP is exposed to ChatGPT through its dedicated Secure MCP Tunnel without an additional Tunnel Manager OAuth/Auth Gateway.
 - Each server tunnel connects directly to its configured Stdio or HTTP target.
-- The OpenAI Runtime API key is a separate control-plane credential used only by `tunnel-client` to establish and operate the Secure MCP Tunnel.
+- The OpenAI Runtime API key is a separate control-plane credential used only by `tunnel-client` to establish and operate Secure MCP Tunnels.
+- The known Manager Runtime API key uses a fixed internal secret reference, `secret://openai/runtime/default`. The native UI asks only for the key value.
+- Downstream tunnel runtimes inherit that Manager key by default; arbitrary secret references remain available for custom downstream secrets and environment values.
 - Runtime API keys and secret environment values are stored through platform secret storage or controlled environment overrides and never persisted as plaintext configuration values.
-
-The loopback advanced web UI uses a per-process same-site session token solely to prevent unrelated browser pages from issuing localhost mutation requests. This is a local CSRF boundary, not MCP authentication and is not exposed through the tunnels.
 
 ## Portable Root
 
@@ -111,4 +113,8 @@ The writable directory under which Tunnel Manager keeps configuration, runtime d
 
 ## Native desktop shell
 
-The normal application uses Gio for its native control surface and can expose a system tray icon. The loopback advanced web UI is a secondary diagnostics/configuration surface. The native UI owns ordinary close/minimize/exit semantics, including explicit exit confirmation and coordinated shutdown.
+The normal application uses Gio as its only management surface. There is no browser-based management UI.
+
+A notification-area/system-tray icon remains active while the Manager process is running. Minimize and close-to-tray remove the native window from the taskbar without shutting down tunnels or owned MCP processes. `Open Manager` creates/restores the native Gio window; explicit Exit performs coordinated shutdown.
+
+A tiny loopback endpoint used only for single-instance ownership/focus handoff is an implementation detail and is not a management interface or tunneled MCP endpoint.

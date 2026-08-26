@@ -2,7 +2,10 @@ package config
 
 import "time"
 
-const SchemaVersion = 1
+const (
+	SchemaVersion               = 1
+	ManagerRuntimeCredentialRef = "secret://openai/runtime/default"
+)
 
 type ManagerConfig struct {
 	SchemaVersion   int                `json:"schema_version"`
@@ -27,7 +30,9 @@ type GeneralConfig struct {
 	ConfirmExit     bool   `json:"confirm_exit"`
 }
 
-type ManagedDefaults struct { IdleTimeoutSeconds int `json:"idle_timeout_seconds"` }
+type ManagedDefaults struct {
+	IdleTimeoutSeconds int `json:"idle_timeout_seconds"`
+}
 
 type LoggingConfig struct {
 	CaptureLevel      string `json:"capture_level"`
@@ -46,7 +51,9 @@ type TunnelClientConfig struct {
 	UpdateCheckIntervalHours int    `json:"update_check_interval_hours"`
 }
 
-type AppearanceConfig struct { Theme string `json:"theme"` }
+type AppearanceConfig struct {
+	Theme string `json:"theme"`
+}
 
 type ServersConfig struct {
 	SchemaVersion int           `json:"schema_version"`
@@ -67,38 +74,118 @@ type ServerEntry struct {
 }
 
 type ServerMode string
+
 const (
 	ModeAlwaysOn ServerMode = "always_on"
-	ModeManaged ServerMode = "managed"
-	ModeManual ServerMode = "manual"
+	ModeManaged  ServerMode = "managed"
+	ModeManual   ServerMode = "manual"
 )
 
 type TransportType string
+
 const (
-	TransportStdio TransportType = "stdio"
-	TransportManagedHTTP TransportType = "managed_http"
+	TransportStdio        TransportType = "stdio"
+	TransportManagedHTTP  TransportType = "managed_http"
 	TransportExternalHTTP TransportType = "external_http"
 )
 
 type TransportConfig struct {
-	Type TransportType `json:"type"`
-	Stdio *StdioTransport `json:"stdio,omitempty"`
-	ManagedHTTP *ManagedHTTPTransport `json:"managed_http,omitempty"`
+	Type         TransportType          `json:"type"`
+	Stdio        *StdioTransport        `json:"stdio,omitempty"`
+	ManagedHTTP  *ManagedHTTPTransport   `json:"manaed_http,omitempty"`
 	ExternalHTTP *ExternalHTTPTransport `json:"external_http,omitempty"`
 }
 
-type LaunchConfig struct { Executable string `json:"executable"`; Args []string `json:"args,omitempty"`; WorkingDirectory string `json:"working_directory,omitempty"` }
-type StdioTransport struct { Executable string `json:"executable"`; Args []string `json:"args,omitempty"`; WorkingDirectory string `json:"working_directory,omitempty"` }
-type ManagedHTTPTransport struct { URL string `json:"url"`; Launch LaunchConfig `json:"launch"` }
-type ExternalHTTPTransport struct { URL string `json:"url"` }
-type EnvironmentConfig struct { Values map[string]string `json:"values,omitempty"`; SecretRefs map[string]string `json:"secret_refs,omitempty"` }
-type RuntimeConfig struct { StartupTimeoutSeconds int `json:"startup_timeout_seconds"`; ShutdownTimeoutSeconds int `json:"shutdown_timeout_seconds"`; IdleTimeoutSeconds *int `json:"idle_timeout_seconds,omitempty"` }
-type ServerLoggingConfig struct { CaptureLevelOverride *string `json:"capture_level_override,omitempty"` }
+type LaunchConfig struct {
+	Executable       string   `json:"executable"`
+	Args             []string `json:"args,omitempty"`
+	WorkingDirectory string   `json:"working_directory,omitempty"`
+}
+
+type StdioTransport struct {
+	Executable       string   `json:"executable"`
+	Args             []string `json:"args,omitempty"`
+	WorkingDirectory string   `json:"working_directory,omitempty"`
+}
+
+type ManagedHTTPTransport struct {
+	URL    string       `json:"url"`
+	Launch LaunchConfig `json:"launch"`
+}
+
+type ExternalHTTPTransport struct {
+	URL string `json:"url"`
+}
+
+type EnvironmentConfig struct {
+	Values     map[string]string `json:"values,omitempty"`
+	SecretRefs map[string]string `json:"secret_refs,omitempty"`
+}
+
+type RuntimeConfig struct {
+	StartupTimeoutSeconds  int  `json:"startup_timeout_seconds"`
+	ShutdownTimeoutSeconds int  `json:"shutdown_timeout_seconds"`
+	IdleTimeoutSeconds     *int `json:"idle_timeout_seconds,omitempty"`
+}
+
+type ServerLoggingConfig struct {
+	CaptureLevelOverride *string `json:"capture_level_override,omitempty"`
+}
 
 func DefaultManagerConfig() ManagerConfig {
-	return ManagerConfig{SchemaVersion: SchemaVersion, General: GeneralConfig{MinimizeToTray:true, CloseBehavior:"minimize", ConfirmExit:true}, ManagedDefaults: ManagedDefaults{IdleTimeoutSeconds:300}, Logging: LoggingConfig{CaptureLevel:"info", DisplayLevel:"info", MemoryLimitMB:25, DiskMinimumLevel:"debug", MaximumFileSizeMB:10, KeepFiles:5}, TunnelClient: TunnelClientConfig{AutoUpdate:true, Channel:"stable", UpdateCheckIntervalHours:24}, Appearance: AppearanceConfig{Theme:"system"}}
+	return ManagerConfig{
+		SchemaVersion: SchemaVersion,
+		ManagerTunnel: TunnelConfig{RuntimeCredentialRef: ManagerRuntimeCredentialRef},
+		General: GeneralConfig{
+			MinimizeToTray: true,
+			CloseBehavior:  "minimize",
+			ConfirmExit:    true,
+		},
+		ManagedDefaults: ManagedDefaults{IdleTimeoutSeconds: 300},
+		Logging: LoggingConfig{
+			CaptureLevel:      "info",
+			DisplayLevel:      "info",
+			MemoryLimitMB:     25,
+			DiskMinimumLevel:  "debug",
+			MaximumFileSizeMB: 10,
+			KeepFiles:         5,
+		},
+		TunnelClient: TunnelClientConfig{
+			AutoUpdate:               true,
+			Channel:                  "stable",
+			UpdateCheckIntervalHours: 24,
+		},
+		Appearance: AppearanceConfig{Theme: "system"},
+	}
 }
-func DefaultServersConfig() ServersConfig { return ServersConfig{SchemaVersion:SchemaVersion, Servers:[]ServerEntry{}} }
-func (e ServerEntry) StartupTimeout() time.Duration { n:=e.Runtime.StartupTimeoutSeconds; if n<=0 { n=30 }; return time.Duration(n)*time.Second }
-func (e ServerEntry) ShutdownTimeout() time.Duration { n:=e.Runtime.ShutdownTimeoutSeconds; if n<=0 { n=10 }; return time.Duration(n)*time.Second }
-func (e ServerEntry) IdleTimeout(def int) time.Duration { n:=def; if e.Runtime.IdleTimeoutSeconds!=nil { n=*e.Runtime.IdleTimeoutSeconds }; if n<=0 { return 0 }; return time.Duration(n)*time.Second }
+
+func DefaultServersConfig() ServersConfig {
+	return ServersConfig{SchemaVersion: SchemaVersion, Servers: []ServerEntry{}}
+}
+
+func (e ServerEntry) StartupTimeout() time.Duration {
+	n := e.Runtime.StartupTimeoutSeconds
+	if n <= 0 {
+		n = 30
+	}
+	return time.Duration(n) * time.Second
+}
+
+func (e ServerEntry) ShutdownTimeout() time.Duration {
+	n := e.Runtime.ShutdownTimeoutSeconds
+	if n <= 0 {
+		n = 10
+	}
+	return time.Duration(n) * time.Second
+}
+
+func (e ServerEntry) IdleTimeout(def int) time.Duration {
+	n := def
+	if e.Runtime.IdleTimeoutSeconds != nil {
+		n = *e.Runtime.IdleTimeoutSeconds
+	}
+	if n <= 0 {
+		return 0
+	}
+	return time.Duration(n) * time.Second
+}
