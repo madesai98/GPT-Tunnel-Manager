@@ -28,9 +28,9 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          TARGET="${{ matrix.target }}"
-          OS="${TARGET%-*}"
-          ARCH="${TARGET#*-}"
+          GOOS="${{ matrix.target }}"
+          OS="${GOOS%-*}"
+          ARCH="${GOOS#*-}"
           EXT=""
           if [[ "$OS" == windows ]]; then EXT=.exe; fi
           mkdir -p dist
