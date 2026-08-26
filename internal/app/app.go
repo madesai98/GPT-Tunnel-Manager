@@ -1,6 +1,6 @@
 package app
 
-import(
+import (
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +12,7 @@ import(
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/admin"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/config"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/events"
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/lifecycleskill"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/logging"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/mcpmanager"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/platform"
@@ -20,32 +21,277 @@ import(
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/servers"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/tunnelclient"
 )
-type managerStatus struct{State string `json:"state"`;Ready bool `json:"ready"`;Error string `json:"error,omitempty"`;HealthURL string `json:"health_url,omitempty"`}
-type App struct{root,exe string;ctx context.Context;cancel context.CancelFunc;done chan struct{};shutdownOnce sync.Once;store *config.Store;cfgMu sync.RWMutex;managerCfg config.ManagerConfig;secretStore secrets.Store;log *logging.Logger;bus *events.Bus;installer *tunnelclient.Installer;factory *servers.Factory;registry *servers.Registry;mcp *mcpmanager.Server;admin *admin.Server;mgrMu sync.Mutex;mgrRuntime *tunnelclient.Runtime;mgrGen uint64;mgrStatus managerStatus;latestMu sync.RWMutex;latest string}
-func New(root,exe string)(*App,error){ctx,cancel:=context.WithCancel(context.Background());store:=config.NewStore(root);m,s,err:=store.LoadOrCreate();if err!=nil{cancel();return nil,err};log,err:=logging.New(root,m.Logging.CaptureLevel,m.Logging.MemoryLimitMB,m.Logging.WriteToDisk,m.Logging.DiskMinimumLevel,m.Logging.MaximumFileSizeMB,m.Logging.KeepFiles);if err!=nil{cancel();return nil,err};sec:=secrets.New(root);bus:=events.New();inst:=tunnelclient.NewInstaller(root);factory:=&servers.Factory{Installer:inst,BinaryOverride:m.TunnelClient.BinaryPath,Secrets:sec,DefaultCredentialRef:m.ManagerTunnel.RuntimeCredentialRef,HealthRoot:filepath.Join(root,"data","tunnel-client","state"),Log:log};reg:=servers.NewRegistry(ctx,store,s,m.ManagedDefaults.IdleTimeoutSeconds,factory,bus);a:=&App{root:root,exe:exe,ctx:ctx,cancel:cancel,done:make(chan struct{}),store:store,managerCfg:m,secretStore:sec,log:log,bus:bus,installer:inst,factory:factory,registry:reg};a.mcp=mcpmanager.New(reg);a.admin=admin.New(a);ch,unsub:=bus.Subscribe(256);go func(){defer unsub();for{select{case<-ctx.Done():return;case e,ok:=<-ch:if !ok{return};log.Log(logging.Info,sourceFor(e),"Lifecycle",string(e.Kind),e.Fields)}}}();return a,nil}
-func sourceFor(e events.Event)string{if e.ServerID!=""{return e.ServerID};return "Manager"}
-func(a *App)Start()error{if err:=a.mcp.Start();err!=nil{return err};if err:=a.admin.Start();err!=nil{_ = a.mcp.Stop(context.Background());return err};a.log.Log(logging.Info,"Manager","Application","GPT Tunnel Manager started",map[string]any{"admin_url":a.admin.URL(),"manager_mcp_url":a.mcp.URL()});go a.restartManagerTunnel();a.registry.StartAlwaysOn(a.ctx);go a.updaterLoop();go func(){<-a.ctx.Done();a.shutdown()}();return nil}
-func(a *App)Done()<-chan struct{}{return a.done}
-func(a *App)AdminURL()string{return a.admin.URL()}
-func(a *App)ManagerConfig()config.ManagerConfig{a.cfgMu.RLock();defer a.cfgMu.RUnlock();return a.managerCfg}
-func(a *App)RequestShutdown(){a.cancel()}
-func(a *App)shutdown(){a.shutdownOnce.Do(func(){a.log.Log(logging.Info,"Manager","Application","shutting down",nil);c,cancel:=context.WithTimeout(context.Background(),45*time.Second);defer cancel();_ = a.mcp.Stop(c);_ = a.registry.StopAll(c);a.mgrMu.Lock();r:=a.mgrRuntime;a.mgrRuntime=nil;a.mgrGen++;a.mgrMu.Unlock();if r!=nil{_ = r.Stop(c)};_ = a.admin.Stop(c);_ = a.log.Close();close(a.done)})}
-func(a *App)restartManagerTunnel(){a.mgrMu.Lock();old:=a.mgrRuntime;a.mgrRuntime=nil;a.mgrGen++;gen:=a.mgrGen;a.mgrStatus=managerStatus{State:"starting"};a.mgrMu.Unlock();if old!=nil{c,cancel:=context.WithTimeout(context.Background(),12*time.Second);_ = old.Stop(c);cancel()};a.cfgMu.RLock();cfg:=a.managerCfg;a.cfgMu.RUnlock();if cfg.ManagerTunnel.TunnelID==""||cfg.ManagerTunnel.RuntimeCredentialRef==""{a.setManagerStatus(gen,managerStatus{State:"not_configured"});return};ctx,cancel:=context.WithTimeout(a.ctx,45*time.Second);defer cancel();active,err:=a.installer.Ensure(ctx,cfg.TunnelClient.BinaryPath);if err!=nil{a.managerStartFailed(gen,err);return};key,err:=a.secretStore.Get(ctx,cfg.ManagerTunnel.RuntimeCredentialRef);if err!=nil{a.managerStartFailed(gen,err);return};a.log.Redactor().Register(key);r,err:=tunnelclient.Start(ctx,tunnelclient.RunSpec{Binary:active.Path,TunnelID:cfg.ManagerTunnel.TunnelID,APIKey:string(key),MCPURL:a.mcp.URL(),HealthDir:filepath.Join(a.root,"data","tunnel-client","state","manager"),StartupTimeout:30*time.Second,ShutdownTimeout:10*time.Second,TelemetryCompatible:false,OnLog:func(stream,line string){a.log.Log(logging.Info,"Manager","Tunnel Client",line,map[string]any{"stream":stream})}});if err!=nil{a.managerStartFailed(gen,err);return};a.mgrMu.Lock();if gen!=a.mgrGen{a.mgrMu.Unlock();c,cancel:=context.WithTimeout(context.Background(),10*time.Second);_ = r.Stop(c);cancel();return};a.mgrRuntime=r;a.mgrStatus=managerStatus{State:"ready",Ready:true,HealthURL:r.HealthURL()};a.mgrMu.Unlock();a.bus.Publish(events.Event{Kind:events.TunnelReady});go a.watchManager(gen,r)}
-func(a *App)setManagerStatus(gen uint64,s managerStatus){a.mgrMu.Lock();if gen==a.mgrGen{a.mgrStatus=s};a.mgrMu.Unlock()}
-func(a *App)managerStartFailed(gen uint64,err error){a.log.Log(logging.Error,"Manager","Tunnel","manager tunnel start failed",map[string]any{"error":err.Error()});a.setManagerStatus(gen,managerStatus{State:"degraded",Error:err.Error()});if a.ctx.Err()==nil{go func(){select{case<-a.ctx.Done():return;case<-time.After(5*time.Second):};a.mgrMu.Lock();valid:=gen==a.mgrGen;a.mgrMu.Unlock();if valid{a.restartManagerTunnel()}}()}}
-func(a *App)watchManager(gen uint64,r *tunnelclient.Runtime){<-r.Done();if a.ctx.Err()!=nil{return};a.mgrMu.Lock();if gen!=a.mgrGen||a.mgrRuntime!=r{a.mgrMu.Unlock();return};a.mgrRuntime=nil;a.mgrStatus=managerStatus{State:"degraded",Error:fmt.Sprint(r.Err())};a.mgrMu.Unlock();a.bus.Publish(events.Event{Kind:events.TunnelDisconnected,Fields:map[string]any{"error":fmt.Sprint(r.Err())}});go func(){select{case<-a.ctx.Done():return;case<-time.After(3*time.Second):a.restartManagerTunnel()}}()}
-func(a *App)AdminState()any{a.cfgMu.RLock();m:=a.managerCfg;a.cfgMu.RUnlock();a.mgrMu.Lock();ms:=a.mgrStatus;a.mgrMu.Unlock();active,_:=a.installer.Current();a.latestMu.RLock();latest:=a.latest;a.latestMu.RUnlock();return map[string]any{"manager_config":m,"entries":a.registry.Entries(),"snapshots":a.registry.List(),"manager_tunnel":ms,"manager_mcp_url":a.mcp.URL(),"admin_url":a.admin.URL(),"tunnel_client":map[string]any{"installed":active.Version,"path":active.Path,"latest":latest},"links":map[string]string{"tunnels":productlinks.ManageTunnels,"runtime_api_keys":productlinks.RuntimeAPIKeys,"plugins":productlinks.ChatGPTPlugins}}}
-func(a *App)SaveManager(ctx context.Context,c config.ManagerConfig)error{if err:=config.ValidateManager(c);err!=nil{return err};a.cfgMu.Lock();old:=a.managerCfg;if err:=a.store.SaveManager(c);err!=nil{a.cfgMu.Unlock();return err};a.managerCfg=c;a.factory.DefaultCredentialRef=c.ManagerTunnel.RuntimeCredentialRef;a.factory.BinaryOverride=c.TunnelClient.BinaryPath;a.registry.SetDefaultIdle(c.ManagedDefaults.IdleTimeoutSeconds);a.cfgMu.Unlock();if old.General.LaunchAtStartup!=c.General.LaunchAtStartup{if err:=platform.SetLaunchAtStartup(ctx,c.General.LaunchAtStartup,a.exe);err!=nil{return err}};if old.ManagerTunnel!=c.ManagerTunnel||old.TunnelClient.BinaryPath!=c.TunnelClient.BinaryPath{go a.restartManagerTunnel()};a.log.Log(logging.Info,"Manager","Configuration","manager settings saved",nil);return nil}
-func(a *App)SaveServer(ctx context.Context,e config.ServerEntry)(config.ServerEntry,error){saved,err:=a.registry.Save(e);if err==nil{a.log.Log(logging.Info,saved.ID,"Configuration","server entry saved",nil)};return saved,err}
-func(a *App)DeleteServer(ctx context.Context,id string)error{err:=a.registry.Delete(ctx,id);if err==nil{a.log.Log(logging.Info,id,"Configuration","server entry deleted",nil)};return err}
-func(a *App)Lifecycle(ctx context.Context,id,action string)(servers.Snapshot,error){switch action{case"start":return a.registry.Start(ctx,id,servers.SourceUI);case"restart":return a.registry.Restart(ctx,id,servers.SourceUI);case"shutdown","stop":return a.registry.Shutdown(ctx,id,servers.SourceUI);default:return servers.Snapshot{},errors.New("unknown lifecycle action")}}
-func(a *App)PutSecret(ctx context.Context,ref,value string)error{if err:=secrets.ValidateRef(ref);err!=nil{return err};b:=[]byte(value);if err:=a.secretStore.Put(ctx,ref,b);err!=nil{return err};a.log.Redactor().Register(b);a.log.Log(logging.Info,"Manager","Secrets","secret stored",map[string]any{"ref":ref});return nil}
-func(a *App)DeleteSecret(ctx context.Context,ref string)error{return a.secretStore.Delete(ctx,ref)}
-func(a *App)Logs()[]logging.Event{return a.log.Ring().Snapshot()}
-func(a *App)ClearLogs(){a.log.Ring().Clear()}
-func(a *App)CheckUpdate(ctx context.Context)(tunnelclient.Release,error){r,err:=a.installer.CheckLatest(ctx);if err==nil{a.latestMu.Lock();a.latest=r.TagName;a.latestMu.Unlock();a.bus.Publish(events.Event{Kind:events.TunnelClientUpdateAvailable,Fields:map[string]any{"version":r.TagName}})};return r,err}
-func(a *App)InstallUpdate(ctx context.Context)(tunnelclient.Active,error){v,err:=a.installer.InstallLatest(ctx);if err==nil{a.bus.Publish(events.Event{Kind:events.TunnelClientUpdated,Fields:map[string]any{"version":v.Version}})};return v,err}
-func(a *App)Rollback(ctx context.Context)(tunnelclient.Active,error){v,err:=a.installer.Rollback();if err==nil{a.log.Log(logging.Warn,"Manager","Updater","tunnel-client rolled back",map[string]any{"version":v.Version})};return v,err}
-func(a *App)updaterLoop(){for{a.cfgMu.RLock();cfg:=a.managerCfg.TunnelClient;a.cfgMu.RUnlock();d:=time.Duration(cfg.UpdateCheckIntervalHours)*time.Hour;if d<=0{d=24*time.Hour};t:=time.NewTimer(d);select{case<-a.ctx.Done():t.Stop();return;case<-t.C:};r,err:=a.CheckUpdate(a.ctx);if err!=nil{a.log.Log(logging.Warn,"Manager","Updater","update check failed",map[string]any{"error":err.Error()});continue};if !cfg.AutoUpdate{continue};cur,_:=a.installer.Current();if r.TagName!=""&&r.TagName!=cur.Version{if _,err:=a.InstallUpdate(a.ctx);err!=nil{a.log.Log(logging.Warn,"Manager","Updater","automatic update failed",map[string]any{"error":err.Error()})}}}}
-func(a *App)Root()string{return a.root}
-func(a *App)ExportSkill(path string)error{b,err:=os.ReadFile(filepath.Join(a.root,"assets","lifecycle-skill","SKILL.md"));if err!=nil{return err};return os.WriteFile(path,b,0600)}
+
+type managerStatus struct {
+	State     string `json:"state"`
+	Ready     bool   `json:"ready"`
+	Error     string `json:"error,omitempty"`
+	HealthURL string `json:"health_url,omitempty"`
+}
+
+type App struct {
+	root string
+	exe  string
+	ctx  context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
+	shutdownOnce sync.Once
+
+	store       *config.Store
+	cfgMu       sync.RWMutex
+	managerCfg  config.ManagerConfig
+	secretStore secrets.Store
+	log         *logging.Logger
+	bus         *events.Bus
+	installer   *tunnelclient.Installer
+	factory     *servers.Factory
+	registry    *servers.Registry
+	mcp         *mcpmanager.Server
+	admin       *admin.Server
+
+	mgrMu      sync.Mutex
+	mgrRuntime *tunnelclient.Runtime
+	mgrGen     uint64
+	mgrStatus  managerStatus
+
+	latestMu sync.RWMutex
+	latest   string
+}
+
+func New(root, exe string) (*App, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	store := config.NewStore(root)
+	managerCfg, serverCfg, err := store.LoadOrCreate()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	log, err := logging.New(root, managerCfg.Logging.CaptureLevel, managerCfg.Logging.MemoryLimitMB, managerCfg.Logging.WriteToDisk, managerCfg.Logging.DiskMinimumLevel, managerCfg.Logging.MaximumFileSizeMB, managerCfg.Logging.KeepFiles)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	secretStore := secrets.New(root)
+	bus := events.New()
+	installer := tunnelclient.NewInstaller(root)
+	factory := &servers.Factory{
+		Installer:            installer,
+		BinaryOverride:       managerCfg.TunnelClient.BinaryPath,
+		Secrets:              secretStore,
+		DefaultCredentialRef: managerCfg.ManagerTunnel.RuntimeCredentialRef,
+		HealthRoot:           filepath.Join(root, "data", "tunnel-client", "state"),
+		Log:                  log,
+	}
+	registry := servers.NewRegistry(ctx, store, serverCfg, managerCfg.ManagedDefaults.IdleTimeoutSeconds, factory, bus)
+	a := &App{
+		root: root, exe: exe, ctx: ctx, cancel: cancel, done: make(chan struct{}),
+		store: store, managerCfg: managerCfg, secretStore: secretStore, log: log,
+		bus: bus, installer: installer, factory: factory, registry: registry,
+	}
+	a.mcp = mcpmanager.New(registry)
+	a.admin = admin.New(a)
+	ch, unsub := bus.Subscribe(256)
+	go func() {
+		defer unsub()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case e, ok := <-ch:
+				if !ok { return }
+				log.Log(logging.Info, sourceFor(e), "Lifecycle", string(e.Kind), e.Fields)
+			}
+		}
+	}()
+	return a, nil
+}
+
+func sourceFor(e events.Event) string {
+	if e.ServerID != "" { return e.ServerID }
+	return "Manager"
+}
+
+func (a *App) Start() error {
+	if err := a.mcp.Start(); err != nil { return err }
+	if err := a.admin.Start(); err != nil {
+		_ = a.mcp.Stop(context.Background())
+		return err
+	}
+	a.log.Log(logging.Info, "Manager", "Application", "GPT Tunnel Manager started", map[string]any{"admin_url": a.admin.URL(), "manager_mcp_url": a.mcp.URL()})
+	go a.restartManagerTunnel()
+	a.registry.StartAlwaysOn(a.ctx)
+	go a.updaterLoop()
+	go func(){ <-a.ctx.Done(); a.shutdown() }()
+	return nil
+}
+
+func (a *App) Done() <-chan struct{} { return a.done }
+func (a *App) AdminURL() string       { return a.admin.URL() }
+func (a *App) Root() string           { return a.root }
+func (a *App) RequestShutdown()       { a.cancel() }
+
+func (a *App) ManagerConfig() config.ManagerConfig {
+	a.cfgMu.RLock(); defer a.cfgMu.RUnlock()
+	return a.managerCfg
+}
+
+func (a *App) shutdown() {
+	a.shutdownOnce.Do(func(){
+		a.log.Log(logging.Info, "Manager", "Application", "shutting down", nil)
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		_ = a.mcp.Stop(ctx)
+		_ = a.registry.StopAll(ctx)
+		a.mgrMu.Lock()
+		runtime := a.mgrRuntime
+		a.mgrRuntime = nil
+		a.mgrGen++
+		a.mgrMu.Unlock()
+		if runtime != nil { _ = runtime.Stop(ctx) }
+		_ = a.admin.Stop(ctx)
+		_ = a.log.Close()
+		close(a.done)
+	})
+}
+
+func (a *App) restartManagerTunnel() {
+	a.mgrMu.Lock()
+	old := a.mgrRuntime
+	a.mgrRuntime = nil
+	a.mgrGen++
+	gen := a.mgrGen
+	a.mgrStatus = managerStatus{State:"starting"}
+	a.mgrMu.Unlock()
+	if old != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		_ = old.Stop(ctx)
+		cancel()
+	}
+	a.cfgMu.RLock(); cfg := a.managerCfg; a.cfgMu.RUnlock()
+	if cfg.ManagerTunnel.TunnelID == "" || cfg.ManagerTunnel.RuntimeCredentialRef == "" {
+		a.setManagerStatus(gen, managerStatus{State:"not_configured"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
+	defer cancel()
+	active, err := a.installer.Ensure(ctx, cfg.TunnelClient.BinaryPath)
+	if err != nil { a.managerStartFailed(gen, err); return }
+	key, err := a.secretStore.Get(ctx, cfg.ManagerTunnel.RuntimeCredentialRef)
+	if err != nil { a.managerStartFailed(gen, err); return }
+	a.log.Redactor().Register(key)
+	runtime, err := tunnelclient.Start(ctx, tunnelclient.RunSpec{
+		Binary: active.Path,
+		TunnelID: cfg.ManagerTunnel.TunnelID,
+		APIKey: string(key),
+		MCPURL: a.mcp.URL(),
+		HealthDir: filepath.Join(a.root,"data","tunnel-client","state","manager"),
+		StartupTimeout: 30*time.Second,
+		ShutdownTimeout: 10*time.Second,
+		TelemetryCompatible: false,
+		OnLog: func(stream,line string){ a.log.Log(logging.Info,"Manager","Tunnel Client",line,map[string]any{"stream":stream}) },
+	})
+	if err != nil { a.managerStartFailed(gen,err); return }
+	a.mgrMu.Lock()
+	if gen != a.mgrGen {
+		a.mgrMu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(),10*time.Second); _ = runtime.Stop(ctx); cancel()
+		return
+	}
+	a.mgrRuntime = runtime
+	a.mgrStatus = managerStatus{State:"ready", Ready:true, HealthURL:runtime.HealthURL()}
+	a.mgrMu.Unlock()
+	a.bus.Publish(events.Event{Kind:events.TunnelReady})
+	go a.watchManager(gen,runtime)
+}
+
+func (a *App) setManagerStatus(gen uint64, status managerStatus) {
+	a.mgrMu.Lock(); if gen == a.mgrGen { a.mgrStatus = status }; a.mgrMu.Unlock()
+}
+
+func (a *App) managerStartFailed(gen uint64, err error) {
+	a.log.Log(logging.Error,"Manager","Tunnel","manager tunnel start failed",map[string]any{"error":err.Error()})
+	a.setManagerStatus(gen,managerStatus{State:"degraded",Error:err.Error()})
+	if a.ctx.Err()!=nil{return}
+	go func(){
+		select{case<-a.ctx.Done():return;case<-time.After(5*time.Second):}
+		a.mgrMu.Lock();valid:=gen==a.mgrGen;a.mgrMu.Unlock();if valid{a.restartManagerTunnel()}
+	}()
+}
+
+func (a *App) watchManager(gen uint64, runtime *tunnelclient.Runtime) {
+	<-runtime.Done()
+	if a.ctx.Err()!=nil{return}
+	a.mgrMu.Lock()
+	if gen!=a.mgrGen || a.mgrRuntime!=runtime { a.mgrMu.Unlock(); return }
+	a.mgrRuntime=nil
+	a.mgrStatus=managerStatus{State:"degraded",Error:fmt.Sprint(runtime.Err())}
+	a.mgrMu.Unlock()
+	a.bus.Publish(events.Event{Kind:events.TunnelDisconnected,Fields:map[string]any{"error":fmt.Sprint(runtime.Err())}})
+	go func(){select{case<-a.ctx.Done():return;case<-time.After(3*time.Second):a.restartManagerTunnel()}}()
+}
+
+func (a *App) AdminState() any {
+	a.cfgMu.RLock(); cfg:=a.managerCfg; a.cfgMu.RUnlock()
+	a.mgrMu.Lock(); managerStatus:=a.mgrStatus; a.mgrMu.Unlock()
+	active,_:=a.installer.Current()
+	a.latestMu.RLock();latest:=a.latest;a.latestMu.RUnlock()
+	return map[string]any{
+		"manager_config": cfg,
+		"entries": a.registry.Entries(),
+		"snapshots": a.registry.List(),
+		"manager_tunnel": managerStatus,
+		"manager_mcp_url": a.mcp.URL(),
+		"admin_url": a.admin.URL(),
+		"tunnel_client": map[string]any{"installed":active.Version,"path":active.Path,"latest":latest},
+		"links": map[string]string{"tunnels":productlinks.ManageTunnels,"runtime_api_keys":productlinks.RuntimeAPIKeys,"plugins":productlinks.ChatGPTPlugins},
+	}
+}
+
+func (a *App) SaveManager(ctx context.Context, cfg config.ManagerConfig) error {
+	if err:=config.ValidateManager(cfg);err!=nil{return err}
+	a.cfgMu.Lock()
+	old:=a.managerCfg
+	if err:=a.store.SaveManager(cfg);err!=nil{a.cfgMu.Unlock();return err}
+	a.managerCfg=cfg
+	a.factory.DefaultCredentialRef=cfg.ManagerTunnel.RuntimeCredentialRef
+	a.factory.BinaryOverride=cfg.TunnelClient.BinaryPath
+	a.registry.SetDefaultIdle(cfg.ManagedDefaults.IdleTimeoutSeconds)
+	a.cfgMu.Unlock()
+	if old.General.LaunchAtStartup!=cfg.General.LaunchAtStartup {
+		if err:=platform.SetLaunchAtStartup(ctx,cfg.General.LaunchAtStartup,a.exe);err!=nil{return err}
+	}
+	if old.Logging != cfg.Logging {
+		if err := a.log.Reconfigure(cfg.Logging); err != nil { return err }
+	}
+	if old.ManagerTunnel!=cfg.ManagerTunnel || old.TunnelClient.BinaryPath!=cfg.TunnelClient.BinaryPath { go a.restartManagerTunnel() }
+	a.log.Log(logging.Info,"Manager","Configuration","manager settings saved",nil)
+	return nil
+}
+
+func (a *App) SaveServer(ctx context.Context,e config.ServerEntry)(config.ServerEntry,error){saved,err:=a.registry.Save(e);if err==nil{a.log.Log(logging.Info,saved.ID,"Configuration","server entry saved",nil)};return saved,err}
+func (a *App) DeleteServer(ctx context.Context,id string)error{err:=a.registry.Delete(ctx,id);if err==nil{a.log.Log(logging.Info,id,"Configuration","server entry deleted",nil)};return err}
+func (a *App) Lifecycle(ctx context.Context,id,action string)(servers.Snapshot,error){switch action{case"start":return a.registry.Start(ctx,id,servers.SourceUI);case"restart":return a.registry.Restart(ctx,id,servers.SourceUI);case"shutdown","stop":return a.registry.Shutdown(ctx,id,servers.SourceUI);default:return servers.Snapshot{},errors.New("unknown lifecycle action")}}
+func (a *App) PutSecret(ctx context.Context,ref,value string)error{if err:=secrets.ValidateRef(ref);err!=nil{return err};b:=[]byte(value);if err:=a.secretStore.Put(ctx,ref,b);err!=nil{return err};a.log.Redactor().Register(b);a.log.Log(logging.Info,"Manager","Secrets","secret stored",map[string]any{"ref":ref});return nil}
+func (a *App) DeleteSecret(ctx context.Context,ref string)error{return a.secretStore.Delete(ctx,ref)}
+func (a *App) Logs()[]logging.Event{return a.log.Ring().Snapshot()}
+func (a *App) ClearLogs(){a.log.Ring().Clear()}
+func (a *App) CheckUpdate(ctx context.Context)(tunnelclient.Release,error){r,err:=a.installer.CheckLatest(ctx);if err==nil{a.latestMu.Lock();a.latest=r.TagName;a.latestMu.Unlock();a.bus.Publish(events.Event{Kind:events.TunnelClientUpdateAvailable,Fields:map[string]any{"version":r.TagName}})};return r,err}
+func (a *App) InstallUpdate(ctx context.Context)(tunnelclient.Active,error){v,err:=a.installer.InstallLatest(ctx);if err==nil{a.bus.Publish(events.Event{Kind:events.TunnelClientUpdated,Fields:map[string]any{"version":v.Version}})};return v,err}
+func (a *App) Rollback(ctx context.Context)(tunnelclient.Active,error){v,err:=a.installer.Rollback();if err==nil{a.log.Log(logging.Warn,"Manager","Updater","tunnel-client rolled back",map[string]any{"version":v.Version})};return v,err}
+
+func (a *App) updaterLoop(){
+	// Check once after startup, then follow the configured cadence. Failure is
+	// non-fatal because existing installed runtimes continue to operate.
+	select{case<-a.ctx.Done():return;case<-time.After(5*time.Second):}
+	for {
+		a.cfgMu.RLock();cfg:=a.managerCfg.TunnelClient;a.cfgMu.RUnlock()
+		r,err:=a.CheckUpdate(a.ctx)
+		if err!=nil{a.log.Log(logging.Warn,"Manager","Updater","update check failed",map[string]any{"error":err.Error()})}else if cfg.AutoUpdate{cur,_:=a.installer.Current();if r.TagName!=""&&r.TagName!=cur.Version{if _,err:=a.InstallUpdate(a.ctx);err!=nil{a.log.Log(logging.Warn,"Manager","Updater","automatic update failed",map[string]any{"error":err.Error()})}}}
+		d:=time.Duration(cfg.UpdateCheckIntervalHours)*time.Hour;if d<=0{d=24*time.Hour};t:=time.NewTimer(d);select{case<-a.ctx.Done():t.Stop();return;case<-t.C:}
+	}
+}
+
+func (a *App) ExportSkill(path string) error {
+	if err:=os.MkdirAll(filepath.Dir(path),0o700);err!=nil && filepath.Dir(path)!="."{return err}
+	return os.WriteFile(path,[]byte(lifecycleskill.Content),0o600)
+}

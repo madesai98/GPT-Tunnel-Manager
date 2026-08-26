@@ -1,9 +1,12 @@
 name: CI
+
 on:
   push:
   pull_request:
+
 permissions:
   contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -11,10 +14,38 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23.x'
-      - run: go test ./...
-      - run: go vet ./...
-  cross-build:
+          go-version: '1.24.x'
+          cache: true
+      - name: Install Gio Linux build dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+      - name: Verify module graph is committed
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - name: Test
+        run: go test ./...
+      - name: Vet
+        run: go vet ./...
+
+  native-gui-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: true
+      - name: Install Gio Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+      - name: Build native desktop app
+        run: go build ./cmd/tunnel-manager
+
+  cross-build-headless:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -24,14 +55,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23.x'
-      - name: Build
+          go-version: '1.24.x'
+          cache: true
+      - name: Build headless-compatible target
         shell: bash
         run: |
-          GOOS="${{ matrix.target }}"
-          OS="${GOOS%-*}"
-          ARCH="${GOOS#*-}"
+          TARGET="${{ matrix.target }}"
+          OS="${TARGET%-*}"
+          ARCH="${TARGET#*-}"
           EXT=""
           if [[ "$OS" == windows ]]; then EXT=.exe; fi
           mkdir -p dist
-          CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" go build -trimpath -ldflags='-s -w' -o "dist/tunnel-manager-${OS}-${ARCH}${EXT}" ./cmd/tunnel-manager
+          CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" go build -tags nogui -trimpath -ldflags='-s -w' -o "dist/tunnel-manager-${OS}-${ARCH}${EXT}" ./cmd/tunnel-manager
