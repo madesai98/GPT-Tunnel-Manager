@@ -30,6 +30,10 @@ _Avoid_: Automatic
 **Manual**:
 A Server Mode whose Desired State can be changed only through the desktop UI.
 
+**Enabled State**:
+Whether a Server Entry is permitted to run. Disabled forces Desired State to Stopped regardless of Server Mode and prevents lifecycle starts until the entry is re-enabled.
+_Avoid_: Desired State, Server Mode
+
 **Desired State**:
 Whether Tunnel Manager currently intends a Server Entry to be Running or Stopped, independent of the process's Observed State.
 _Avoid_: Status, Observed State
@@ -49,6 +53,10 @@ _Avoid_: External HTTP MCP Endpoint
 **External HTTP MCP Endpoint**:
 An already-running Streamable HTTP MCP service that Tunnel Manager did not launch; Tunnel Manager owns its tunnel connection but not the external process lifetime.
 _Avoid_: Owned MCP Process
+
+**Portable Root**:
+The writable filesystem directory under which Tunnel Manager keeps its mutable configuration, data, managed tools, and optional logs. On Windows and Linux it is the directory containing the executable; on macOS it is the directory containing the `.app` bundle.
+_Avoid_: Current working directory, OS application-data directory
 
 **Manager MCP**:
 The MCP server built into Tunnel Manager that exposes the lifecycle tools `get_status`, `start`, `restart`, and `shutdown`.
