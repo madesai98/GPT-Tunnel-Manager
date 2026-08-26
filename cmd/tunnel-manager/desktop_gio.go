@@ -10,6 +10,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"os"
 	"sync"
 	"time"
 
@@ -26,7 +27,6 @@ import (
 	"gioui.org/widget/material"
 
 	coreapp "github.com/madesai98/GPT-Tunnel-Manager/internal/app"
-	"github.com/madesai98/GPT-Tunnel-Manager/internal/platform"
 )
 
 type desktopUI struct {
@@ -61,10 +61,14 @@ type desktopUI struct {
 	cancelExit     widget.Clickable
 	confirmExit    widget.Clickable
 
-	mu      sync.RWMutex
-	busy    bool
-	message string
+	mu           sync.RWMutex
+	busy         bool
+	message      string
+	windowHidden bool
+	hiding       bool
+	exiting      bool
 
+	showReq  chan struct{}
 	trayStop chan struct{}
 }
 
@@ -72,14 +76,16 @@ func oneLine() widget.Editor { return widget.Editor{SingleLine: true} }
 
 func newDesktopUI(core *coreapp.App, win *gioapp.Window) *desktopUI {
 	u := &desktopUI{
-		core:     core,
-		win:      win,
-		th:       material.NewTheme(),
-		page:     "servers",
-		list:     widget.List{List: layout.List{Axis: layout.Vertical}},
-		logs:     widget.List{List: layout.List{Axis: layout.Vertical}},
-		rows:     make(map[string]*rowActions),
-		trayStop: make(chan struct{}),
+		core:         core,
+		win:          win,
+		th:           material.NewTheme(),
+		page:         "servers",
+		list:         widget.List{List: layout.List{Axis: layout.Vertical}},
+		logs:         widget.List{List: layout.List{Axis: layout.Vertical}},
+		rows:         make(map[string]*rowActions),
+		windowHidden: core.ManagerConfig().General.StartMinimized,
+		showReq:      make(chan struct{}, 1),
+		trayStop:     make(chan struct{}),
 	}
 	u.th.Shaper = text.NewShaper(text.WithCollection(gofont.Collection()))
 	u.logSearch = oneLine()
@@ -90,24 +96,27 @@ func newDesktopUI(core *coreapp.App, win *gioapp.Window) *desktopUI {
 	return u
 }
 
-func runDesktop(core *coreapp.App, setFocus func(func())) error {
-	errCh := make(chan error, 1)
-	ready := make(chan *desktopUI, 1)
+func (u *desktopUI) applyWindowOptions() {
+	u.win.Option(
+		gioapp.Title("GPT Tunnel Manager"),
+		gioapp.Size(unit.Dp(1120), unit.Dp(760)),
+		gioapp.MinSize(unit.Dp(780), unit.Dp(520)),
+		gioapp.Decorated(false),
+	)
+}
 
+func runDesktop(core *coreapp.App, setFocus func(func())) error {
+	ready := make(chan *desktopUI, 1)
 	go func() {
 		win := new(gioapp.Window)
-		win.Option(
-			gioapp.Title("GPT Tunnel Manager"),
-			gioapp.Size(unit.Dp(1120), unit.Dp(760)),
-			gioapp.MinSize(unit.Dp(780), unit.Dp(520)),
-			gioapp.Decorated(false),
-		)
 		u := newDesktopUI(core, win)
+		u.applyWindowOptions()
 		ready <- u
-		if core.ManagerConfig().General.StartMinimized {
-			win.Option(gioapp.Minimized.Option())
+		if err := u.loop(); err != nil {
+			fmt.Fprintln(os.Stderr, "desktop:", err)
+			os.Exit(1)
 		}
-		errCh <- u.loop()
+		os.Exit(0)
 	}()
 
 	u := <-ready
@@ -115,21 +124,15 @@ func runDesktop(core *coreapp.App, setFocus func(func())) error {
 		setFocus(u.showWindow)
 	}
 
-	var stopTray func()
-	if core.ManagerConfig().General.MinimizeToTray {
-		start, stop := systray.RunWithExternalLoop(u.trayReady, func() {})
-		start()
-		stopTray = func() {
-			close(u.trayStop)
-			stop()
-		}
-	}
+	startTray, stopTray := systray.RunWithExternalLoop(u.trayReady, func() {})
+	startTray()
+	defer func() {
+		close(u.trayStop)
+		stopTray()
+	}()
 
 	gioapp.Main()
-	if stopTray != nil {
-		stopTray()
-	}
-	return <-errCh
+	return nil
 }
 
 func (u *desktopUI) loop() error {
@@ -139,40 +142,123 @@ func (u *desktopUI) loop() error {
 		for {
 			select {
 			case <-u.core.Done():
-				u.win.Perform(system.ActionClose)
+				u.mu.RLock()
+				hidden := u.windowHidden
+				u.mu.RUnlock()
+				if !hidden {
+					u.win.Perform(system.ActionClose)
+				}
 				return
 			case <-ticker.C:
-				u.win.Invalidate()
+				u.mu.RLock()
+				hidden := u.windowHidden
+				u.mu.RUnlock()
+				if !hidden {
+					u.win.Invalidate()
+				}
 			}
 		}
 	}()
 
 	var ops op.Ops
 	for {
-		switch e := u.win.Event().(type) {
+		u.mu.RLock()
+		hidden := u.windowHidden
+		u.mu.RUnlock()
+		if hidden {
+			select {
+			case <-u.core.Done():
+				return nil
+			case <-u.showReq:
+				u.mu.Lock()
+				if u.exiting {
+					u.mu.Unlock()
+					return nil
+				}
+				u.windowHidden = false
+				u.hiding = false
+				u.mu.Unlock()
+				u.applyWindowOptions()
+			}
+		}
+
+		switch event := u.win.Event().(type) {
 		case gioapp.ConfigEvent:
-			u.deco.Maximized = e.Config.Mode == gioapp.Maximized
+			u.deco.Maximized = event.Config.Mode == gioapp.Maximized
 		case gioapp.DestroyEvent:
-			u.core.RequestShutdown()
-			<-u.core.Done()
-			return e.Err
+			u.mu.Lock()
+			wasHiding := u.hiding
+			u.hiding = false
+			exiting := u.exiting
+			u.windowHidden = true
+			u.mu.Unlock()
+
+			if exiting {
+				u.core.RequestShutdown()
+				<-u.core.Done()
+				return event.Err
+			}
+			if wasHiding {
+				continue
+			}
+
+			cfg := u.core.ManagerConfig()
+			if cfg.General.CloseBehavior == "exit" {
+				if cfg.General.ConfirmExit {
+					u.confirmingExit = true
+					u.dontAskAgain.Value = false
+					u.signalShow()
+				} else {
+					u.shutdownNow()
+				}
+			}
 		case gioapp.FrameEvent:
-			gtx := gioapp.NewContext(&ops, e)
+			gtx := gioapp.NewContext(&ops, event)
 			u.layout(gtx)
-			e.Frame(gtx.Ops)
+			event.Frame(gtx.Ops)
 		}
 	}
 }
 
+func (u *desktopUI) signalShow() {
+	select {
+	case u.showReq <- struct{}{}:
+	default:
+	}
+}
+
 func (u *desktopUI) showWindow() {
+	u.mu.RLock()
+	hidden := u.windowHidden
+	exiting := u.exiting
+	u.mu.RUnlock()
+	if exiting {
+		return
+	}
+	if hidden {
+		u.signalShow()
+		return
+	}
 	u.win.Option(gioapp.Windowed.Option())
 	u.win.Perform(system.ActionRaise)
 	u.win.Invalidate()
 }
 
+func (u *desktopUI) hideToTray() {
+	u.mu.Lock()
+	if u.windowHidden || u.exiting || u.hiding {
+		u.mu.Unlock()
+		return
+	}
+	u.hiding = true
+	u.windowHidden = true
+	u.mu.Unlock()
+	u.win.Perform(system.ActionClose)
+}
+
 func (u *desktopUI) requestClose() {
 	if u.core.ManagerConfig().General.CloseBehavior == "minimize" {
-		u.win.Perform(system.ActionMinimize)
+		u.hideToTray()
 		return
 	}
 	u.requestExit()
@@ -190,19 +276,28 @@ func (u *desktopUI) requestExit() {
 
 func (u *desktopUI) shutdownNow() {
 	u.mu.Lock()
-	if u.message == "Shutting down…" {
+	if u.exiting {
 		u.mu.Unlock()
 		return
 	}
+	u.exiting = true
 	u.busy = true
 	u.message = "Shutting down…"
+	hidden := u.windowHidden
 	u.mu.Unlock()
-	u.win.Invalidate()
+	if !hidden {
+		u.win.Invalidate()
+	}
 
 	go func() {
 		u.core.RequestShutdown()
 		<-u.core.Done()
-		u.win.Perform(system.ActionClose)
+		u.mu.RLock()
+		hidden := u.windowHidden
+		u.mu.RUnlock()
+		if !hidden {
+			u.win.Perform(system.ActionClose)
+		}
 	}()
 }
 
@@ -210,7 +305,7 @@ func (u *desktopUI) layout(gtx layout.Context) layout.Dimensions {
 	paint.Fill(gtx.Ops, u.th.Bg)
 	actions := u.deco.Update(gtx)
 	if actions&system.ActionMinimize != 0 {
-		u.win.Perform(system.ActionMinimize)
+		u.hideToTray()
 	}
 	if actions&system.ActionMaximize != 0 {
 		u.win.Perform(system.ActionMaximize)
@@ -363,16 +458,22 @@ func (u *desktopUI) async(label string, fn func() error) {
 		} else if u.message == label {
 			u.message = "Done: " + label
 		}
+		hidden := u.windowHidden
 		u.mu.Unlock()
-		u.win.Invalidate()
+		if !hidden {
+			u.win.Invalidate()
+		}
 	}()
 }
 
 func (u *desktopUI) setMessage(message string) {
 	u.mu.Lock()
 	u.message = message
+	hidden := u.windowHidden
 	u.mu.Unlock()
-	u.win.Invalidate()
+	if !hidden {
+		u.win.Invalidate()
+	}
 }
 
 func (u *desktopUI) trayReady() {
@@ -384,7 +485,6 @@ func (u *desktopUI) trayReady() {
 	open := systray.AddMenuItem("Open Manager", "Show the GPT Tunnel Manager window")
 	status := systray.AddMenuItem("Status", "Runtime status summary")
 	status.Disable()
-	advanced := systray.AddMenuItem("Open Advanced Web UI", "Open the local loopback management UI")
 	systray.AddSeparator()
 	exit := systray.AddMenuItem("Exit Tunnel Manager", "Disconnect tunnels and stop owned MCP servers")
 
@@ -397,12 +497,16 @@ func (u *desktopUI) trayReady() {
 				return
 			case <-open.ClickedCh:
 				u.showWindow()
-			case <-advanced.ClickedCh:
-				_ = platform.OpenURL(context.Background(), u.core.AdminURL())
 			case <-exit.ClickedCh:
 				u.requestExit()
 			case <-ticker.C:
 				ready, degraded := 0, 0
+				manager := u.core.ManagerSnapshot()
+				if manager.Ready {
+					ready++
+				} else if manager.State == "degraded" {
+					degraded++
+				}
 				snapshots := u.core.Snapshots()
 				for _, snapshot := range snapshots {
 					if snapshot.Ready {
@@ -412,7 +516,7 @@ func (u *desktopUI) trayReady() {
 						degraded++
 					}
 				}
-				status.SetTitle(fmt.Sprintf("Status: %d ready, %d degraded, %d total", ready, degraded, len(snapshots)))
+				status.SetTitle(fmt.Sprintf("Status: %d ready, %d degraded, %d total", ready, degraded, len(snapshots)+1))
 			}
 		}
 	}()
