@@ -1,0 +1,205 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example v1.0.0
+        required: true
+        default: v1.0.0
+  push:
+    branches:
+      - main
+    paths:
+      - .github/release-trigger.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.version || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        name: Resolve release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION='${{ github.event.inputs.version }}'
+          else
+            VERSION="$(jq -r '.version' .github/release-trigger.json)"
+          fi
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $VERSION" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Refuse an existing release or tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists" >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists" >&2
+            exit 1
+          fi
+
+  build:
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            runner: ubuntu-24.04
+            archive: tar.gz
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            archive: tar.gz
+          - target: windows-amd64
+            runner: windows-2025
+            archive: zip
+          - target: windows-arm64
+            runner: windows-11-arm
+            archive: zip
+          - target: darwin-amd64
+            runner: macos-15-intel
+            archive: tar.gz
+          - target: darwin-arm64
+            runner: macos-15
+            archive: tar.gz
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: true
+      - name: Install Gio Linux build dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+      - name: Build native release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET='${{ matrix.target }}'
+          OS="${TARGET%-*}"
+          ARCH="${TARGET#*-}"
+          VERSION='${{ needs.metadata.outputs.version }}'
+          BASENAME="GPT-Tunnel-Manager-${VERSION}-${OS}-${ARCH}"
+          mkdir -p "stage/$BASENAME"
+          EXT=""
+          if [[ "$OS" == windows ]]; then EXT=.exe; fi
+          go build -trimpath -ldflags='-s -w' -o "stage/$BASENAME/tunnel-manager${EXT}" ./cmd/tunnel-manager
+          cp README.md "stage/$BASENAME/README.md"
+          if [[ -d assets/lifecycle-skill ]]; then
+            mkdir -p "stage/$BASENAME/lifecycle-skill"
+            cp -R assets/lifecycle-skill/. "stage/$BASENAME/lifecycle-skill/"
+          fi
+      - name: Package Unix release
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET='${{ matrix.target }}'
+          VERSION='${{ needs.metadata.outputs.version }}'
+          BASENAME="GPT-Tunnel-Manager-${VERSION}-${TARGET}"
+          tar -C stage -czf "${BASENAME}.tar.gz" "$BASENAME"
+      - name: Package Windows release
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $target='${{ matrix.target }}'
+          $version='${{ needs.metadata.outputs.version }}'
+          $basename="GPT-Tunnel-Manager-$version-$target"
+          Compress-Archive -Path "stage/$basename" -DestinationPath "$basename.zip" -CompressionLevel Optimal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: GPT-Tunnel-Manager-${{ needs.metadata.outputs.version }}-${{ matrix.target }}.${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [metadata, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Build source packages and changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          PREFIX="GPT-Tunnel-Manager-${VERSION}/"
+          git archive --format=tar.gz --prefix="$PREFIX" -o "dist/GPT-Tunnel-Manager-${VERSION}-source.tar.gz" HEAD
+          git archive --format=zip --prefix="$PREFIX" -o "dist/GPT-Tunnel-Manager-${VERSION}-source.zip" HEAD
+
+          PREVIOUS_TAG="$(git tag --sort=-version:refname | head -n 1 || true)"
+          {
+            echo "# GPT Tunnel Manager ${VERSION}"
+            echo
+            echo "## Highlights"
+            echo
+            echo "- Portable Go desktop application for supervising MCP servers through separate OpenAI Secure MCP Tunnels."
+            echo "- Native Gio desktop UI and system tray on Windows, Linux, and macOS."
+            echo "- Always On, Managed, and Manual lifecycle modes with Stdio, Managed HTTP, and External HTTP transports."
+            echo "- Dedicated Manager MCP exposing exactly four lifecycle tools: get_status, start, restart, and shutdown."
+            echo "- Platform secret storage, log redaction/rotation, tunnel-client verification/update/rollback, and packaged lifecycle skill."
+            echo "- No additional Manager/plugin authentication layer; each downstream MCP server owns its own authentication."
+            echo
+            echo "## Release binaries"
+            echo
+            echo "- Windows x64 and ARM64"
+            echo "- Linux x64 and ARM64"
+            echo "- macOS Intel x64 and Apple Silicon ARM64"
+            echo
+            echo "## Changelog"
+            echo
+            if [[ -n "$PREVIOUS_TAG" ]]; then
+              git log --no-merges --pretty='- %s (%h)' "$PREVIOUS_TAG"..HEAD
+            else
+              git log --no-merges --pretty='- %s (%h)' HEAD
+            fi
+          } > "dist/CHANGELOG-${VERSION}.md"
+
+          (
+            cd dist
+            sha256sum *.tar.gz *.zip > SHA256SUMS.txt
+          )
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$VERSION" \
+            dist/* \
+            --target "$GITHUB_SHA" \
+            --title "GPT Tunnel Manager $VERSION" \
+            --notes-file "dist/CHANGELOG-${VERSION}.md"
