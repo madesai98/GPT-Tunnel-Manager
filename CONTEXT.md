@@ -1,122 +1,114 @@
-# GPT Tunnel Manager
+# GPT Tunnel Manager Context
 
-GPT Tunnel Manager is a portable desktop control plane for running local MCP servers through separate OpenAI Secure MCP Tunnel connections and controlling their lifecycle from both the desktop UI and ChatGPT.
+GPT Tunnel Manager is a portable desktop control plane for running local MCP servers through separate OpenAI Secure MCP Tunnel connections and controlling eligible lifecycles from both the native desktop UI and ChatGPT.
 
-## Language
+This document defines the settled v1 vocabulary and architecture. ADR 0008 supersedes the earlier Shared OAuth/Auth Gateway proposal.
 
-**Tunnel Manager**:
-The cross-platform desktop application that owns Server Entries, Tunnel Runtimes, lifecycle policy, and the Manager MCP.
-_Avoid_: Manager app, tunnel app
+## Core terms
 
-**MCP Server**:
-An external MCP implementation registered with Tunnel Manager and exposed to ChatGPT through its own tunnel.
-_Avoid_: Plugin, tool server
+**Tunnel Manager**  
+The cross-platform desktop application that owns Server Entries, Tunnel Runtimes, lifecycle policy, the Manager MCP, local diagnostics, and managed `tunnel-client` installation.
 
-**Server Entry**:
+**MCP Server**  
+An external MCP implementation registered with Tunnel Manager and exposed through its own tunnel.
+
+**Server Entry**  
 Tunnel Manager's persisted identity and configuration for one MCP Server.
-_Avoid_: Server profile, MCP profile
 
-**Server ID**:
-The immutable generated identifier for one Server Entry. It is the authoritative identity used by Manager MCP lifecycle tools and by Developer Plugins participating in Tunnel Manager lifecycle orchestration. Deleting and recreating a Server Entry creates a new Server ID even if its display name, tunnel, or command are the same.
-_Avoid_: Display name, Developer Plugin name, Tunnel ID
+**Server ID**  
+The immutable generated `srv_...` identifier for one Server Entry. It is the authoritative identity used by Manager MCP lifecycle tools and participating Developer Plugin Lifecycle Markers. Deleting and recreating an entry creates a new ID.
 
-**Server Mode**:
-The policy that determines how a Server Entry's Desired State may be controlled. The supported modes are Always On, Managed, and Manual.
-_Avoid_: Startup mode, runtime state
+**Server Mode**  
+The lifecycle policy for a Server Entry:
 
-**Always On**:
-A Server Mode whose Desired State is Running whenever Tunnel Manager is active.
+- **Always On**: Desired State is Running whenever Tunnel Manager is active and the entry is enabled.
+- **Managed**: Desired State may be changed by the desktop UI or Manager MCP.
+- **Manual**: Desired State may be changed only by the desktop UI.
 
-**Managed**:
-A Server Mode whose Desired State can be controlled through the Manager MCP as well as the desktop UI.
-_Avoid_: Automatic
+**Enabled State**  
+Whether a Server Entry is permitted to run. Disabled entries are forced stopped and cannot be started until re-enabled.
 
-**Manual**:
-A Server Mode whose Desired State can be changed only through the desktop UI.
+**Desired State**  
+Whether Tunnel Manager currently intends an entry to be Running or Stopped.
 
-**Enabled State**:
-Whether a Server Entry is permitted to run. Disabled forces Desired State to Stopped regardless of Server Mode and prevents lifecycle starts until the entry is re-enabled.
-_Avoid_: Desired State, Server Mode
+**Observed State**  
+The runtime condition Tunnel Manager observes: Stopped, Starting, Ready, Degraded, Retry Wait, or Stopping.
 
-**Desired State**:
-Whether Tunnel Manager currently intends a Server Entry to be Running or Stopped, independent of the process's Observed State.
-_Avoid_: Status, Observed State
+**Managed Activity**  
+Meaningful MCP request work that resets a Managed entry's idle timer. Initialization, keepalives, health probes, and routine notification chatter do not count.
 
-**Observed State**:
-The current runtime condition Tunnel Manager observes for a Server Entry: Stopped, Starting, Ready, Degraded, Retry Wait, or Stopping.
-_Avoid_: Desired State, status
+## Transport and ownership
 
-**Managed Activity**:
-Meaningful MCP work that resets an active Managed Server Entry's idle timeout; initialization and routine transport or session chatter do not count.
-_Avoid_: Any tunnel traffic, keepalive
+**Transport Type**  
+How a Server Entry reaches its MCP Server:
 
-**Transport Type**:
-How a Server Entry reaches its MCP Server. The v1 values are Stdio, Managed HTTP, and External HTTP.
-_Avoid_: Server Mode, Tunnel Type
+- **Stdio**: `tunnel-client` launches the configured executable and communicates over stdio.
+- **Managed HTTP**: Tunnel Manager launches and owns an HTTP MCP process; `tunnel-client` connects to the configured local URL.
+- **External HTTP**: The HTTP MCP service already exists independently; Tunnel Manager owns only its tunnel runtime and never terminates the external process.
 
-**Stdio**:
-A Transport Type where the configured MCP process communicates over stdio. On a no-auth direct path, `tunnel-client` launches the process; when centralized OAuth is required, Tunnel Manager owns the stdio process behind its Auth Gateway.
+Commands are always persisted as executable plus argument array. There is no shell-command string in configuration and Manager MCP tools cannot supply commands.
 
-**Managed HTTP**:
-A Transport Type where Tunnel Manager launches and owns an HTTP MCP process, while the Tunnel Runtime ultimately connects to that process either directly or through the Auth Gateway.
-_Avoid_: External HTTP
+**Owned MCP Process**  
+An MCP server process launched by Tunnel Manager or its owned tunnel runtime. It is terminated when its Server Entry stops or Tunnel Manager exits.
 
-**Owned MCP Process**:
-An MCP server process launched by Tunnel Manager or by a Manager-owned Tunnel Runtime and therefore terminated when Tunnel Manager exits.
-_Avoid_: External HTTP MCP Endpoint
+**Tunnel Runtime**  
+A foreground `tunnel-client` process owned by Tunnel Manager for the Manager MCP or one Server Entry.
 
-**External HTTP**:
-A Transport Type where the configured Streamable HTTP MCP service already exists independently of Tunnel Manager. Tunnel Manager owns the Tunnel Runtime but not the external server process.
-_Avoid_: Managed HTTP
+**Runtime Group**  
+The process-tree ownership boundary for one active Server Entry or the Manager tunnel. Unix-like platforms use process-group semantics; Windows uses process-tree termination for Manager-owned descendants. Each Server Entry can be stopped independently and application shutdown cleans all Manager-owned descendants.
 
-**External HTTP MCP Endpoint**:
-The configured endpoint of an External HTTP Server Entry. Tunnel Manager disconnects its tunnel when stopping or exiting but does not terminate the independently owned HTTP process.
-_Avoid_: Owned MCP Process
+## ChatGPT integration
 
-**Runtime Group**:
-The isolated OS-level process ownership boundary for the Manager tunnel or one Server Entry. Each active Server Entry has its own Runtime Group so it can be stopped independently while Manager termination still cleans up all Manager-owned processes. On Windows this maps to a Job Object; on Unix-like systems it maps to process-group/session semantics.
-_Avoid_: Server Mode, Tunnel Runtime
+**Manager MCP**  
+The loopback MCP service built into Tunnel Manager. It exposes exactly:
 
-**Portable Root**:
-The writable filesystem directory under which Tunnel Manager keeps its mutable configuration, data, managed tools, and optional logs. On Windows and Linux it is the directory containing the executable; on macOS it is the directory containing the `.app` bundle.
-_Avoid_: Current working directory, OS application-data directory
+- `get_status`
+- `start`
+- `restart`
+- `shutdown`
 
-**Manager MCP**:
-The MCP server built into Tunnel Manager that exposes the lifecycle tools `get_status`, `start`, `restart`, and `shutdown`.
-_Avoid_: Manager Plugin
+Lifecycle mutation tools accept only immutable configured Server IDs. They never accept executable paths, arguments, environment variables, secret values, or Tunnel IDs.
 
-**Tunnel Runtime**:
-A running foreground `tunnel-client` instance owned by Tunnel Manager for the Manager MCP or one MCP Server.
-_Avoid_: Tunnel, runtime server
+**Developer Plugin**  
+A ChatGPT Developer Mode plugin connected to one tunnel. Each MCP Server has its own plugin; Tunnel Manager does not merge server tools into the Manager plugin.
 
-**Developer Plugin**:
-A custom Developer Mode plugin created on chatgpt.com that connects ChatGPT to one tunnel and exposes that MCP server's tools. Its display name is entirely user-chosen and is not part of Tunnel Manager identity or lifecycle mapping.
-_Avoid_: Skill, ChatGPT App
+**Manager Developer Plugin**  
+The Developer Plugin connected to the Manager tunnel. It exposes only the four Manager MCP lifecycle tools.
 
-**Participating Developer Plugin**:
-A Developer Plugin associated with a Server Entry and carrying that entry's Lifecycle Marker. Participation is independent of whether the Server Entry is currently Always On, Managed, or Manual.
-_Avoid_: Managed Developer Plugin, name-prefixed plugin
+**Participating Developer Plugin**  
+A per-server Developer Plugin whose description contains the Lifecycle Marker for its Server Entry.
 
-**Lifecycle Marker**:
-The standard self-identification in a Participating Developer Plugin's description that identifies GPT Tunnel Manager participation and carries the immutable Server ID. The marker and Server ID are authoritative; no Developer Plugin naming convention or prefix is required or suggested.
-_Avoid_: Managed Developer Plugin Marker, heuristic name matching, name prefix
+**Lifecycle Marker**  
+The standard description block:
 
-**Manager Developer Plugin**:
-The Developer Plugin connected to the Manager MCP tunnel. It is the control-plane plugin and is excluded from Lifecycle Marker discovery to avoid recursion.
-_Avoid_: Manager Plugin bundle
+```text
+Managed by GPT Tunnel Manager.
+GTM_SERVER_ID=<server-id>
+Follow the GPT Tunnel Manager Lifecycle Skill before using this plugin.
+```
 
-**Lifecycle Skill**:
-A separately installed, generic ChatGPT Skill that teaches ChatGPT to discover Participating Developer Plugins from their Lifecycle Markers, use the embedded Server ID with the Manager MCP, follow the lifecycle behavior appropriate to the Server Entry's reported mode and state, and only then use the target Developer Plugin. The Skill contains no server-specific registry, names, or IDs.
-_Avoid_: Manager Plugin, per-server Skill configuration
+The immutable Server ID is authoritative; plugin display names are informational only.
 
-**Authentication Policy**:
-The effective end-user authentication requirement for the Manager MCP or one Server Entry. The v1 policies are No Authentication and Shared OAuth, with Server Entries able to inherit the global default or override it when overrides are enabled.
-_Avoid_: Tunnel runtime API key, MCP process credential
+**Lifecycle Skill**  
+The separately installed generic ChatGPT Skill in `assets/lifecycle-skill/SKILL.md`. It reads a plugin's Lifecycle Marker, checks the Manager MCP, applies mode-specific lifecycle behavior, waits for Ready, and only then invokes the target plugin. It contains no registry of server-specific names or IDs.
 
-**Shared OAuth**:
-The centrally configured OAuth 2.1/OIDC identity system used by every protected Manager or Server Entry resource. Resources share the same provider and identity system but receive resource-bound tokens rather than sharing one literal access token.
-_Avoid_: Shared bearer token, tunnel API key
+## Authentication boundary
 
-**Auth Gateway**:
-A Manager-owned loopback MCP HTTP facade used when Shared OAuth is required. It validates the incoming bearer token and resource policy before forwarding the MCP request to the configured underlying Stdio, Managed HTTP, External HTTP, or Manager MCP target.
-_Avoid_: Public authorization server, general reverse proxy
+GPT Tunnel Manager v1 adds **no Manager-layer authentication** to the Manager MCP or participating server tunnels.
+
+- Each MCP server is responsible for any authentication its own service requires.
+- The Manager MCP is exposed to ChatGPT through its dedicated Secure MCP Tunnel without an additional Tunnel Manager OAuth/Auth Gateway.
+- Each server tunnel connects directly to its configured Stdio or HTTP target.
+- The OpenAI Runtime API key is a separate control-plane credential used only by `tunnel-client` to establish and operate the Secure MCP Tunnel.
+- Runtime API keys and secret environment values are stored through platform secret storage or controlled environment overrides and never persisted as plaintext configuration values.
+
+The loopback advanced web UI uses a per-process same-site session token solely to prevent unrelated browser pages from issuing localhost mutation requests. This is a local CSRF boundary, not MCP authentication and is not exposed through the tunnels.
+
+## Portable Root
+
+**Portable Root**  
+The writable directory under which Tunnel Manager keeps configuration, runtime data, managed `tunnel-client` versions, instance metadata, and optional logs. Windows/Linux use the executable's directory. macOS resolves to the directory containing the `.app` bundle when packaged that way. Tunnel Manager does not silently fall back to OS application-data directories.
+
+## Native desktop shell
+
+The normal application uses Gio for its native control surface and can expose a system tray icon. The loopback advanced web UI is a secondary diagnostics/configuration surface. The native UI owns ordinary close/minimize/exit semantics, including explicit exit confirmation and coordinated shutdown.

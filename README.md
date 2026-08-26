@@ -1,27 +1,47 @@
 # GPT Tunnel Manager
 
-GPT Tunnel Manager is a portable Go application for running and supervising multiple local MCP servers through separate OpenAI Secure MCP Tunnels, plus a dedicated Manager MCP tunnel for lifecycle control from ChatGPT.
+GPT Tunnel Manager is a portable Go desktop application for supervising local MCP servers through separate OpenAI Secure MCP Tunnels, plus a dedicated Manager MCP tunnel that lets ChatGPT control eligible server lifecycles.
 
-## Current architecture
+## Architecture
 
-- No authentication layer is added by GPT Tunnel Manager. Each MCP server is responsible for its own local/upstream authentication when needed.
-- The OpenAI runtime API key is used only by `tunnel-client` to access the OpenAI tunnel control plane.
-- Every Server Entry has its own immutable `srv_...` ID and its own OpenAI `tunnel_...` ID.
-- Server modes: Always On, Managed, Manual.
-- Transports: stdio, manager-owned HTTP, external HTTP.
-- The Manager MCP exposes exactly four tools: `get_status`, `start`, `restart`, `shutdown`.
-- Manager lifecycle mutations accept configured Server IDs only; they cannot inject commands, paths, environment variables, secrets, or tunnel IDs.
-- `tunnel-client` runs in the foreground and is owned as part of the server runtime process group/tree.
-- Managed idle shutdown is driven by structured `tunnel-client` dispatcher telemetry and is disabled when telemetry compatibility is not known.
-- Configuration lives beside the executable in a strict Portable Root.
+- GPT Tunnel Manager adds no authentication layer to the Manager MCP or participating server tunnels. Each MCP server remains responsible for any authentication it needs.
+- The OpenAI Runtime API key is used only by `tunnel-client` to access the OpenAI tunnel control plane.
+- Every Server Entry has an immutable `srv_...` ID and its own OpenAI `tunnel_...` ID.
+- Server modes are Always On, Managed, and Manual.
+- Transport types are Stdio, Managed HTTP, and External HTTP.
+- The Manager MCP exposes exactly four tools: `get_status`, `start`, `restart`, and `shutdown`.
+- Manager MCP lifecycle mutation accepts configured Server IDs only. It cannot receive executable paths, command arguments, environment variables, secret values, or tunnel IDs.
+- `tunnel-client` runs in the foreground under Tunnel Manager process ownership. Managed HTTP child processes are also owned by Tunnel Manager; External HTTP targets are never terminated by it.
+- Managed idle shutdown is enabled only when the installed `tunnel-client` telemetry format is explicitly known to support meaningful-activity classification.
+- Mutable configuration and managed tooling live in the strict Portable Root beside the application.
 
-## Run
+## Desktop application
+
+The normal executable starts a native Gio desktop window and, when enabled, a system tray icon. The native UI provides:
+
+- Server status and lifecycle controls.
+- Add/edit/delete Server Entries.
+- Stdio, Managed HTTP, and External HTTP configuration.
+- Environment and secret-reference configuration.
+- Manager tunnel and runtime-key reference configuration.
+- Secret-store entry.
+- Tunnel-client update and rollback controls.
+- Structured log filtering, clearing, and text/JSONL export.
+- Launch-at-login, start-minimized, tray, close behavior, exit confirmation, disk logging, and appearance settings.
+
+A loopback-only advanced web UI is also available from Settings or the tray. Its mutation routes are protected with a per-process same-site local session token. The Manager MCP rejects browser-originated requests entirely.
+
+Run from source:
 
 ```bash
 go run ./cmd/tunnel-manager
 ```
 
-On first start the app creates `config/manager.json` and `config/servers.json` under the Portable Root and opens the loopback management UI in your browser. The UI can configure the Manager tunnel, store runtime API keys in the platform secret store, add/edit Server Entries, control lifecycle, view/export logs, and install or roll back `tunnel-client`.
+Headless operation for diagnostics or controlled deployments:
+
+```bash
+go run -tags nogui ./cmd/tunnel-manager --no-gui
+```
 
 Useful CLI operations:
 
@@ -36,11 +56,11 @@ printf '%s' "$CONTROL_PLANE_API_KEY" | tunnel-manager secret put secret://openai
 
 ## First-time setup
 
-1. Create a Manager tunnel in OpenAI Platform and one tunnel for each MCP server you want to expose.
+1. Create one Manager tunnel in OpenAI Platform and one tunnel for each MCP server you want to expose.
 2. Create a Restricted Runtime API key with Tunnels Read + Use.
-3. Open GPT Tunnel Manager settings and store the key under a `secret://...` reference.
-4. Configure the Manager tunnel ID and credential reference.
-5. Add Server Entries. Use one Developer Plugin per Server Entry in ChatGPT Developer Mode.
+3. Start GPT Tunnel Manager and store the key under a `secret://...` reference in Settings.
+4. Configure the Manager Tunnel ID and credential reference.
+5. Add Server Entries. Create one ChatGPT Developer Mode plugin per Server Entry.
 6. Put this marker in every participating Developer Plugin description:
 
 ```text
@@ -49,27 +69,49 @@ GTM_SERVER_ID=<server-id>
 Follow the GPT Tunnel Manager Lifecycle Skill before using this plugin.
 ```
 
-7. Add `assets/lifecycle-skill/SKILL.md` separately as the lifecycle skill. The Manager Developer Plugin itself only connects to the Manager tunnel and exposes the four Manager MCP tools.
+7. Install `assets/lifecycle-skill/SKILL.md` separately as the generic lifecycle skill. The Manager Developer Plugin itself only connects to the Manager tunnel and exposes the four Manager MCP tools.
 
 ## Secret storage
 
-- Windows: DPAPI (`CurrentUser`) with only encrypted ciphertext stored below Portable Root.
-- macOS: Keychain through the system `security` utility.
-- Linux: Secret Service through `secret-tool`; if Secret Service is unavailable or locked, secret operations fail rather than falling back to plaintext.
-- Environment override is available through a deterministic `GTM_SECRET_<hash>` variable for controlled deployments.
+- Windows: DPAPI scoped to the current user; only ciphertext is stored under Portable Root.
+- macOS: Keychain via the system `security` utility.
+- Linux: Secret Service via `secret-tool`; unavailable or locked keyrings fail closed rather than storing plaintext.
+- Controlled deployments may use the deterministic `GTM_SECRET_<hash>` environment override.
 
-Configuration files never contain secret values.
+Configuration files contain secret references, never secret values. Secrets loaded at runtime are registered with the central redactor before related child output is retained.
 
 ## tunnel-client
 
-Unless `tunnel_client.binary_path` is configured, GPT Tunnel Manager downloads the latest official `openai/tunnel-client` release for the current OS/architecture, verifies the release SHA-256 digest, extracts it under `tools/tunnel-client/<version>/`, and atomically selects it for future starts. Existing foreground runtimes keep their current binary until restarted.
+Unless `tunnel_client.binary_path` is configured, GPT Tunnel Manager:
 
-## Development
+1. Queries the official `openai/tunnel-client` latest release.
+2. Selects the exact OS/architecture archive.
+3. Requires and verifies the release asset SHA-256 digest.
+4. Extracts into `tools/tunnel-client/<version>/`.
+5. Runs a compatibility probe before promotion.
+6. Atomically updates `active.json` while retaining a previous version for rollback.
+
+Existing foreground runtimes keep the binary they started with until they are restarted.
+
+## Development and verification
+
+The repository uses Go 1.24 because the native Gio dependency requires it.
 
 ```bash
+go mod tidy
+git diff --exit-code -- go.mod go.sum
 go test ./...
 go vet ./...
 go build ./cmd/tunnel-manager
 ```
 
-CI also cross-compiles the command for Windows, Linux, and macOS on amd64 and arm64.
+CI verifies the native desktop build on Linux, Windows, and macOS and headless-compatible builds for:
+
+- windows/amd64
+- windows/arm64
+- linux/amd64
+- linux/arm64
+- darwin/amd64
+- darwin/arm64
+
+See `docs/IMPLEMENTATION_PLAN.md`, `docs/IMPLEMENTATION_STATUS.md`, and ADR 0008 for the final v1 architecture.

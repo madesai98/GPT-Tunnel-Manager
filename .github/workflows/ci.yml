@@ -1,9 +1,12 @@
 name: CI
+
 on:
   push:
   pull_request:
+
 permissions:
   contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -12,16 +15,18 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24.x'
+          cache: true
       - name: Install Gio Linux build dependencies
         run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
-      - name: Resolve module graph
+      - name: Verify module graph is committed
         run: |
           go mod tidy
-          echo GO_SUM_BEGIN
-          cat go.sum
-          echo GO_SUM_END
-      - run: go test ./...
-      - run: go vet ./...
+          git diff --exit-code -- go.mod go.sum
+      - name: Test
+        run: go test ./...
+      - name: Vet
+        run: go vet ./...
+
   native-gui-build:
     strategy:
       fail-fast: false
@@ -33,13 +38,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24.x'
+          cache: true
       - name: Install Gio Linux build dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
-      - name: Resolve module graph
-        run: go mod tidy
       - name: Build native desktop app
         run: go build ./cmd/tunnel-manager
+
   cross-build-headless:
     runs-on: ubuntu-latest
     strategy:
@@ -51,6 +56,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24.x'
+          cache: true
       - name: Build headless-compatible target
         shell: bash
         run: |

@@ -1,5 +1,9 @@
-# Centralize OAuth with a conditional local Auth Gateway
+# ADR 0007: Centralize OAuth with a conditional local Auth Gateway
 
-Tunnel Manager centralizes end-user authentication for protected MCP resources by placing a Manager-owned loopback Auth Gateway in front of any Manager or Server Entry configured for Shared OAuth. The gateway validates bearer tokens, issuer, resource/audience, expiry, and scopes, exposes the protected-resource metadata expected by MCP OAuth, and forwards only authenticated MCP traffic to the underlying target. The OAuth authorization server itself remains an external HTTPS service and is not implemented or publicly exposed by Tunnel Manager.
+Status: **Superseded by ADR 0008**.
 
-No-auth resources keep the direct `tunnel-client` path and do not pay the cost of an otherwise unnecessary proxy. Shared OAuth resources use the same provider and identity system but distinct resource-bound tokens for each tunnel-backed MCP resource, preventing one plugin's token from being replayed against another.
+This ADR recorded an earlier design in which Tunnel Manager would place a Manager-owned loopback Auth Gateway in front of Manager and Server Entry MCP resources configured for Shared OAuth.
+
+The design was intentionally removed before v1 implementation. The final architecture does not centralize end-user authentication and does not add an Auth Gateway. Each MCP server is responsible for its own authentication when needed, while the Manager MCP and each server tunnel use the direct tunnel-client path described in ADR 0008.
+
+This file remains only as historical design context. It must not be used as an implementation requirement.
