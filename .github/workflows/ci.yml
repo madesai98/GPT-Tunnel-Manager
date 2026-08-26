@@ -14,6 +14,12 @@ jobs:
           go-version: '1.24.x'
       - name: Install Gio Linux build dependencies
         run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+      - name: Resolve module graph
+        run: |
+          go mod tidy
+          echo GO_SUM_BEGIN
+          cat go.sum
+          echo GO_SUM_END
       - run: go test ./...
       - run: go vet ./...
   native-gui-build:
@@ -30,6 +36,8 @@ jobs:
       - name: Install Gio Linux build dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+      - name: Resolve module graph
+        run: go mod tidy
       - name: Build native desktop app
         run: go build ./cmd/tunnel-manager
   cross-build-headless:
