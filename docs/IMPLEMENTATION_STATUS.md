@@ -2,7 +2,7 @@
 
 Date: 2026-08-26
 
-Status: v1 implementation complete in code; merge is gated by the repository CI matrix described below.
+Status: v1 implementation complete and merged to `main` at `adc6c25865f594dec60de38afbd820f044555d8d`.
 
 ADR 0008 is authoritative for authentication architecture and supersedes ADR 0007 plus all Shared OAuth/Auth Gateway language from earlier planning.
 
@@ -76,9 +76,9 @@ ADR 0008 is authoritative for authentication architecture and supersedes ADR 000
 - Each MCP server owns its own authentication needs.
 - OpenAI Runtime API keys are used solely by `tunnel-client` for Secure MCP Tunnel control-plane access.
 
-## Verification gates
+## Final verification
 
-The final merge requires all of the following on the final commit:
+PR #2 and the post-merge `main` build both passed the complete repository CI matrix on the final code tree:
 
 - Committed `go.mod` / `go.sum` are tidy with zero generated diff.
 - `go test ./...` succeeds.
@@ -93,7 +93,7 @@ The final merge requires all of the following on the final commit:
 - Headless-compatible build succeeds for darwin/amd64.
 - Headless-compatible build succeeds for darwin/arm64.
 
-The prior native-shell commit already passed native builds on all three desktop OS runners, `go test`, `go vet`, and all six headless cross-builds. The final hardening/documentation commit is intentionally rerun through the same complete matrix before merge.
+The implementation merge commit is `adc6c25865f594dec60de38afbd820f044555d8d`. The successful PR validation run was GitHub Actions run `33018813016`; the successful post-merge validation run was `33018929266`.
 
 ## Deliberate external acceptance boundary
 
