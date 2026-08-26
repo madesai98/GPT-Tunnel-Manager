@@ -17,22 +17,38 @@ Tunnel Manager's persisted identity and configuration for one MCP Server.
 _Avoid_: Server profile, MCP profile
 
 **Server Mode**:
-The lifecycle policy assigned to a Server Entry. The supported modes are Always On, Managed, and Manual.
-_Avoid_: Startup mode
+The policy that determines how a Server Entry's Desired State may be controlled. The supported modes are Always On, Managed, and Manual.
+_Avoid_: Startup mode, runtime state
 
 **Always On**:
-A Server Mode whose desired state is running whenever Tunnel Manager is active.
+A Server Mode whose Desired State is Running whenever Tunnel Manager is active.
 
 **Managed**:
-A Server Mode whose desired state can be controlled through the Manager MCP as well as the desktop UI.
+A Server Mode whose Desired State can be controlled through the Manager MCP as well as the desktop UI.
 _Avoid_: Automatic
 
 **Manual**:
-A Server Mode whose desired state can be changed only through the desktop UI.
+A Server Mode whose Desired State can be changed only through the desktop UI.
 
 **Desired State**:
-Whether Tunnel Manager currently intends a Server Entry to be running or stopped, independent of the process's observed runtime state.
-_Avoid_: Status
+Whether Tunnel Manager currently intends a Server Entry to be Running or Stopped, independent of the process's Observed State.
+_Avoid_: Status, Observed State
+
+**Observed State**:
+The current runtime condition Tunnel Manager observes for a Server Entry: Stopped, Starting, Ready, Degraded, Retry Wait, or Stopping.
+_Avoid_: Desired State, status
+
+**Managed Activity**:
+Meaningful MCP work that resets an active Managed Server Entry's idle timeout; initialization and routine transport or session chatter do not count.
+_Avoid_: Any tunnel traffic, keepalive
+
+**Owned MCP Process**:
+An MCP server process launched by Tunnel Manager and therefore terminated when Tunnel Manager exits.
+_Avoid_: External HTTP MCP Endpoint
+
+**External HTTP MCP Endpoint**:
+An already-running Streamable HTTP MCP service that Tunnel Manager did not launch; Tunnel Manager owns its tunnel connection but not the external process lifetime.
+_Avoid_: Owned MCP Process
 
 **Manager MCP**:
 The MCP server built into Tunnel Manager that exposes the lifecycle tools `get_status`, `start`, `restart`, and `shutdown`.
