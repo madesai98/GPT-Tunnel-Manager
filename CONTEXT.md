@@ -16,6 +16,10 @@ _Avoid_: Plugin, tool server
 Tunnel Manager's persisted identity and configuration for one MCP Server.
 _Avoid_: Server profile, MCP profile
 
+**Server ID**:
+The immutable generated identifier for one Server Entry. It is the authoritative identity used by Manager MCP lifecycle tools and by managed Developer Plugins. Deleting and recreating a Server Entry creates a new Server ID even if its display name, tunnel, or command are the same.
+_Avoid_: Display name, Developer Plugin name, Tunnel ID
+
 **Server Mode**:
 The policy that determines how a Server Entry's Desired State may be controlled. The supported modes are Always On, Managed, and Manual.
 _Avoid_: Startup mode, runtime state
@@ -70,10 +74,14 @@ _Avoid_: Tunnel, runtime server
 A custom Developer Mode plugin created on chatgpt.com that connects ChatGPT to one tunnel and exposes that MCP server's tools.
 _Avoid_: Skill, ChatGPT App
 
+**Managed Developer Plugin Marker**:
+The standard self-identification placed in an individual Developer Plugin's description indicating that it participates in GPT Tunnel Manager lifecycle orchestration. A managed Developer Plugin also carries the immutable Server ID of its corresponding Server Entry in its description. The marker and Server ID are authoritative for Lifecycle Skill discovery; plugin names or prefixes are optional human-facing conventions only.
+_Avoid_: Skill-side plugin registry, heuristic name matching
+
 **Manager Developer Plugin**:
-The Developer Plugin connected to the Manager MCP tunnel.
+The Developer Plugin connected to the Manager MCP tunnel. It is the control-plane plugin and is excluded from Managed Developer Plugin discovery to avoid recursion.
 _Avoid_: Manager Plugin bundle
 
 **Lifecycle Skill**:
-A separately installed ChatGPT Skill that teaches ChatGPT to check and control Managed Server Entries through the Manager MCP before using their corresponding Developer Plugins.
-_Avoid_: Manager Plugin
+A separately installed, generic ChatGPT Skill that teaches ChatGPT to discover Managed Developer Plugins dynamically from their self-identifying descriptions, use the embedded Server ID with the Manager MCP, check/start/wait for Managed Server Entries when required, and then use the target Developer Plugin. The Skill contains no server-specific registry, names, or IDs.
+_Avoid_: Manager Plugin, per-server Skill configuration
