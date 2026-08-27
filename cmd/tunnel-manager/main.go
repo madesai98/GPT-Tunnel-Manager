@@ -14,14 +14,13 @@ import (
 	"time"
 
 	coreapp "github.com/madesai98/GPT-Tunnel-Manager/internal/app"
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/buildinfo"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/config"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/instance"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/marker"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/portable"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/secrets"
 )
-
-var version = "1.0.2"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -43,7 +42,7 @@ func run(args []string) error {
 	if len(args) > 0 {
 		switch args[0] {
 		case "version", "--version", "-version":
-			fmt.Println(version)
+			fmt.Println(buildinfo.Version)
 			return nil
 		case "print-root":
 			fmt.Println(root)
