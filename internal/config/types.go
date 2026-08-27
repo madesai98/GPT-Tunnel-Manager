@@ -90,10 +90,10 @@ const (
 )
 
 type TransportConfig struct {
-	Type         TransportType          `json:"type"`
-	Stdio        *StdioTransport        `json:"stdio,omitempty"`
-	ManagedHTTP  *ManagedHTTPTransport   `json:"manaed_http,omitempty"`
-	ExternalHTTP *ExternalHTTPTransport `json:"external_http,omitempty"`
+	Type         TransportType           `json:"type"`
+	Stdio        *StdioTransport         `json:"stdio,omitempty"`
+	ManagedHTTP  *ManagedHTTPTransport   `json:"managed_http,omitempty"`
+	ExternalHTTP *ExternalHTTPTransport  `json:"external_http,omitempty"`
 }
 
 type LaunchConfig struct {
