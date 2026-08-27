@@ -13,9 +13,8 @@ import (
 var (
 	desktopUser32                   = windows.NewLazySystemDLL("user32.dll")
 	desktopEnumWindows              = desktopUser32.NewProc("EnumWindows")
+	desktopGetForegroundWindow      = desktopUser32.NewProc("GetForegroundWindow")
 	desktopGetWindowThreadProcessID = desktopUser32.NewProc("GetWindowThreadProcessId")
-	desktopGetWindowTextLengthW     = desktopUser32.NewProc("GetWindowTextLengthW")
-	desktopGetWindowTextW           = desktopUser32.NewProc("GetWindowTextW")
 	desktopGetWindowRect            = desktopUser32.NewProc("GetWindowRect")
 	desktopIsWindow                 = desktopUser32.NewProc("IsWindow")
 	desktopIsWindowVisible          = desktopUser32.NewProc("IsWindowVisible")
@@ -33,17 +32,13 @@ type desktopRect struct {
 	Bottom int32
 }
 
-func desktopWindowTitle(hwnd uintptr) string {
-	length, _, _ := desktopGetWindowTextLengthW.Call(hwnd)
-	if length == 0 {
-		return ""
+func desktopWindowBelongsToProcess(hwnd uintptr) bool {
+	if hwnd == 0 {
+		return false
 	}
-	buf := make([]uint16, int(length)+1)
-	n, _, _ := desktopGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-	if n == 0 {
-		return ""
-	}
-	return windows.UTF16ToString(buf[:n])
+	var windowPID uint32
+	desktopGetWindowThreadProcessID.Call(hwnd, uintptr(unsafe.Pointer(&windowPID)))
+	return windowPID == uint32(os.Getpid())
 }
 
 func desktopWindowArea(hwnd uintptr) int64 {
@@ -58,6 +53,18 @@ func desktopWindowArea(hwnd uintptr) int64 {
 		return 0
 	}
 	return width * height
+}
+
+func foregroundDesktopWindow() uintptr {
+	hwnd, _, _ := desktopGetForegroundWindow.Call()
+	if !desktopWindowBelongsToProcess(hwnd) {
+		return 0
+	}
+	visible, _, _ := desktopIsWindowVisible.Call(hwnd)
+	if visible == 0 || desktopWindowArea(hwnd) == 0 {
+		return 0
+	}
+	return hwnd
 }
 
 func findDesktopWindow(visibleOnly bool) uintptr {
@@ -78,18 +85,6 @@ func findDesktopWindow(visibleOnly bool) uintptr {
 		}
 
 		area := desktopWindowArea(hwnd)
-		if area == 0 {
-			return 1
-		}
-
-		// Prefer the expected Gio title when Windows exposes it, but do not
-		// require an exact title. Gio can briefly expose the native window with
-		// an empty/different caption even though it is the correct top-level UI.
-		if desktopWindowTitle(hwnd) == "GPT Tunnel Manager" {
-			found = hwnd
-			foundArea = area
-			return 0
-		}
 		if area > foundArea {
 			found = hwnd
 			foundArea = area
@@ -114,22 +109,27 @@ func rememberedDesktopWindow() uintptr {
 		return 0
 	}
 	valid, _, _ := desktopIsWindow.Call(hwnd)
-	if valid == 0 {
+	if valid == 0 || !desktopWindowBelongsToProcess(hwnd) {
 		return 0
 	}
 	return hwnd
 }
 
 func hideDesktopWindow() bool {
-	hwnd := findDesktopWindow(true)
+	// The window is normally foreground when the user clicks our custom
+	// minimize/close button. Capturing it directly avoids probing the Gio
+	// window with message-based APIs while Gio is processing that same frame.
+	hwnd := foregroundDesktopWindow()
+	if hwnd == 0 {
+		hwnd = findDesktopWindow(true)
+	}
 	if hwnd == 0 {
 		return false
 	}
 	rememberDesktopWindow(hwnd)
 
-	// ShowWindow can synchronously dispatch messages to Gio's window thread.
-	// When called while processing a Gio frame this can deadlock the UI. Queue
-	// the visibility change instead so the event loop remains free to process it.
+	// Queue the visibility change. ShowWindowAsync does not wait for Gio's
+	// window procedure to process the show-state event.
 	const swHide = 0
 	queued, _, _ := desktopShowWindowAsync.Call(hwnd, swHide)
 	return queued != 0
