@@ -165,7 +165,7 @@ func (u *desktopUI) managerRow(gtx layout.Context, snapshot coreapp.ManagerSnaps
 				})
 			}),
 		)
-	})(gtx))
+	}))
 }
 
 func (u *desktopUI) row(id string) *rowActions {
@@ -254,7 +254,7 @@ func (u *desktopUI) serverRow(gtx layout.Context, entry config.ServerEntry, snap
 				})
 			}),
 		)
-	})(gtx))
+	}))
 }
 
 func (u *desktopUI) lifecycle(id, action string) {
