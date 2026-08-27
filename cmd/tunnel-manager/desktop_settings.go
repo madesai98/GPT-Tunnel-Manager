@@ -122,6 +122,7 @@ func (u *desktopUI) settingsConfig() (config.ManagerConfig, error) {
 
 func (u *desktopUI) settings(gtx layout.Context) layout.Dimensions {
 	s := &u.set
+	u.handleManagerSelfUpdate(gtx)
 	for s.closeBtn.Clicked(gtx) {
 		s.closeMode = (s.closeMode + 1) % 2
 	}
@@ -248,6 +249,9 @@ func (u *desktopUI) settings(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(buttonInset(u.th, &s.install, "Install Latest")),
 					layout.Rigid(buttonInset(u.th, &s.rollback, "Roll Back")),
 				)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, u.managerSelfUpdateSection)
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Top: unit.Dp(14)}.Layout(gtx, material.Button(u.th, &s.save, "Save Settings").Layout)

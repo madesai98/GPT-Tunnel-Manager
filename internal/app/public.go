@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/config"
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/logging"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/servers"
 )
 
@@ -39,4 +40,8 @@ func (a *App) ManagerSnapshot() ManagerSnapshot {
 
 func (a *App) RestartManagerTunnel() {
 	go a.restartManagerTunnel()
+}
+
+func (a *App) LogSelfUpdate(message string, fields map[string]any) {
+	a.log.Log(logging.Info, "Manager", "Updater", message, fields)
 }
