@@ -19,6 +19,7 @@ var (
 	desktopIsWindow                 = desktopUser32.NewProc("IsWindow")
 	desktopIsWindowVisible          = desktopUser32.NewProc("IsWindowVisible")
 	desktopShowWindowAsync          = desktopUser32.NewProc("ShowWindowAsync")
+	desktopSetWindowPos             = desktopUser32.NewProc("SetWindowPos")
 	desktopSetForegroundWindow      = desktopUser32.NewProc("SetForegroundWindow")
 
 	desktopWindowStateMu sync.Mutex
@@ -145,11 +146,36 @@ func restoreDesktopWindow() bool {
 	}
 	rememberDesktopWindow(hwnd)
 
-	const swShow = 5
-	queued, _, _ := desktopShowWindowAsync.Call(hwnd, swShow)
-	if queued == 0 {
+	// SW_RESTORE explicitly activates and displays a window, including when
+	// Windows considers it minimized. Pair it with an asynchronous SetWindowPos
+	// request that sets WS_VISIBLE as a second non-blocking restore path. This
+	// makes tray activation reliable without synchronously messaging Gio.
+	const swRestore = 9
+	showQueued, _, _ := desktopShowWindowAsync.Call(hwnd, swRestore)
+
+	const (
+		hwndTop          = 0
+		swpNoSize        = 0x0001
+		swpNoMove        = 0x0002
+		swpShowWindow    = 0x0040
+		swpAsyncWindowPos = 0x4000
+	)
+	positionQueued, _, _ := desktopSetWindowPos.Call(
+		hwnd,
+		hwndTop,
+		0,
+		0,
+		0,
+		0,
+		swpNoSize|swpNoMove|swpShowWindow|swpAsyncWindowPos,
+	)
+	if showQueued == 0 && positionQueued == 0 {
 		return false
 	}
+
+	// The tray click is a user gesture, so Windows permits this process to ask
+	// for foreground activation. SW_RESTORE/SetWindowPos handle visibility;
+	// this call only brings the restored manager to the front.
 	desktopSetForegroundWindow.Call(hwnd)
 	return true
 }
