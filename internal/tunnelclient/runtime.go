@@ -1,6 +1,7 @@
 package tunnelclient
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,18 +19,19 @@ import (
 )
 
 type RunSpec struct {
-	Binary              string
-	TunnelID            string
-	APIKey              string
-	MCPURL              string
-	MCPCommand          []string
-	Dir                 string
-	Env                 map[string]string
-	HealthDir           string
-	StartupTimeout      time.Duration
-	ShutdownTimeout     time.Duration
-	TelemetryCompatible bool
-	OnLog               func(stream, line string)
+	Binary                  string
+	TunnelID                string
+	APIKey                  string
+	MCPURL                  string
+	MCPCommand              []string
+	Dir                     string
+	Env                     map[string]string
+	HealthDir               string
+	StartupTimeout          time.Duration
+	ShutdownTimeout         time.Duration
+	TelemetryCompatible     bool
+	RequireControlPlanePoll bool
+	OnLog                   func(stream, line string)
 }
 
 type managedProcess interface {
@@ -133,7 +136,7 @@ func Start(ctx context.Context, s RunSpec) (*Runtime, error) {
 	r.p = p
 	readyCtx, cancel := context.WithTimeout(ctx, s.StartupTimeout)
 	defer cancel()
-	health, err := waitReady(readyCtx, urlFile, p)
+	health, err := waitReady(readyCtx, urlFile, p, s.RequireControlPlanePoll)
 	if err != nil {
 		stopCtx, c := context.WithTimeout(context.Background(), s.ShutdownTimeout)
 		_ = p.Stop(stopCtx, s.ShutdownTimeout)
@@ -154,14 +157,24 @@ func Start(ctx context.Context, s RunSpec) (*Runtime, error) {
 	return r, nil
 }
 
-func waitReady(ctx context.Context, urlFile string, p managedProcess) (string, error) {
+const (
+	controlPlanePollMetric      = "commands_poll_last_successful_timestamp_seconds"
+	maxControlPlaneMetricLine   = 1 << 20
+	initialMetricScannerBufSize = 64 << 10
+)
+
+func waitReady(ctx context.Context, urlFile string, p managedProcess, requireControlPlanePoll bool) (string, error) {
 	client := &http.Client{Timeout: 2 * time.Second}
 	tick := time.NewTicker(150 * time.Millisecond)
 	defer tick.Stop()
 	var health string
+	var lastControlPlaneErr error
 	for {
 		select {
 		case <-ctx.Done():
+			if requireControlPlanePoll && lastControlPlaneErr != nil {
+				return "", fmt.Errorf("tunnel-client control-plane readiness timeout: %v: %w", lastControlPlaneErr, ctx.Err())
+			}
 			return "", fmt.Errorf("tunnel-client readiness timeout: %w", ctx.Err())
 		case <-p.Done():
 			if err := p.Err(); err != nil {
@@ -174,18 +187,76 @@ func waitReady(ctx context.Context, urlFile string, p managedProcess) (string, e
 					health = strings.TrimSpace(string(b))
 				}
 			}
-			if health != "" {
-				req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(health, "/")+"/readyz", nil)
-				resp, err := client.Do(req)
-				if err == nil {
-					resp.Body.Close()
-					if resp.StatusCode == http.StatusOK {
-						return health, nil
-					}
-				}
+			if health == "" {
+				continue
 			}
+
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(health, "/")+"/readyz", nil)
+			resp, err := client.Do(req)
+			if err != nil {
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				continue
+			}
+			if !requireControlPlanePoll {
+				return health, nil
+			}
+
+			ready, err := controlPlanePollReady(ctx, client, health)
+			if ready {
+				return health, nil
+			}
+			lastControlPlaneErr = err
 		}
 	}
+}
+
+func controlPlanePollReady(ctx context.Context, client *http.Client, health string) (bool, error) {
+	metricsURL := strings.TrimRight(health, "/") + "/metrics"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metricsURL, nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("metrics endpoint returned %s", resp.Status)
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, initialMetricScannerBufSize), maxControlPlaneMetricLine)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if line != controlPlanePollMetric &&
+			!strings.HasPrefix(line, controlPlanePollMetric+" ") &&
+			!strings.HasPrefix(line, controlPlanePollMetric+"{") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		value, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		if err != nil {
+			continue
+		}
+		if value <= 0 {
+			return false, errors.New("no successful control-plane poll observed")
+		}
+		return true, nil
+	}
+	if err := scanner.Err(); err != nil {
+		return false, fmt.Errorf("scan metrics response: %w", err)
+	}
+	return false, fmt.Errorf("missing %s metric", controlPlanePollMetric)
 }
 
 var ignored = map[string]bool{
