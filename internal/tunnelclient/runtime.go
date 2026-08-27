@@ -19,19 +19,18 @@ import (
 )
 
 type RunSpec struct {
-	Binary                  string
-	TunnelID                string
-	APIKey                  string
-	MCPURL                  string
-	MCPCommand              []string
-	Dir                     string
-	Env                     map[string]string
-	HealthDir               string
-	StartupTimeout          time.Duration
-	ShutdownTimeout         time.Duration
-	TelemetryCompatible     bool
-	RequireControlPlanePoll bool
-	OnLog                   func(stream, line string)
+	Binary              string
+	TunnelID            string
+	APIKey              string
+	MCPURL              string
+	MCPCommand          []string
+	Dir                 string
+	Env                 map[string]string
+	HealthDir           string
+	StartupTimeout      time.Duration
+	ShutdownTimeout     time.Duration
+	TelemetryCompatible bool
+	OnLog               func(stream, line string)
 }
 
 type managedProcess interface {
@@ -136,7 +135,11 @@ func Start(ctx context.Context, s RunSpec) (*Runtime, error) {
 	r.p = p
 	readyCtx, cancel := context.WithTimeout(ctx, s.StartupTimeout)
 	defer cancel()
-	health, err := waitReady(readyCtx, urlFile, p, s.RequireControlPlanePoll)
+	// Local /readyz only proves the daemon and MCP target are ready. A ChatGPT
+	// tunnel is not actually usable until tunnel-client has completed at least
+	// one successful control-plane poll, so require that stronger condition for
+	// every managed tunnel before publishing it as ready.
+	health, err := waitReady(readyCtx, urlFile, p, true)
 	if err != nil {
 		stopCtx, c := context.WithTimeout(context.Background(), s.ShutdownTimeout)
 		_ = p.Stop(stopCtx, s.ShutdownTimeout)
