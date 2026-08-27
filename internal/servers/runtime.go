@@ -141,17 +141,18 @@ func (f *Factory) Start(ctx context.Context, e config.ServerEntry) (runtime Runt
 	}
 
 	spec := tunnelclient.RunSpec{
-		Binary:              active.Path,
-		TunnelID:            e.Tunnel.TunnelID,
-		APIKey:              string(key),
-		MCPURL:              mcpURL,
-		MCPCommand:          mcpCmd,
-		Dir:                 tunnelDir,
-		Env:                 env,
-		HealthDir:           f.HealthRoot,
-		StartupTimeout:      e.StartupTimeout(),
-		ShutdownTimeout:     e.ShutdownTimeout(),
-		TelemetryCompatible: tunnelclient.TelemetryCompatible(active.Version),
+		Binary:                           active.Path,
+		TunnelID:                         e.Tunnel.TunnelID,
+		APIKey:                           string(key),
+		MCPURL:                           mcpURL,
+		MCPCommand:                       mcpCmd,
+		StdioSendInitializedNotification: e.Transport.Type == config.TransportStdio && tunnelclient.StdioInitializedNotificationCompatible(active.Version),
+		Dir:                              tunnelDir,
+		Env:                              env,
+		HealthDir:                        f.HealthRoot,
+		StartupTimeout:                   e.StartupTimeout(),
+		ShutdownTimeout:                  e.ShutdownTimeout(),
+		TelemetryCompatible:              tunnelclient.TelemetryCompatible(active.Version),
 		OnLog: func(stream, line string) {
 			if f.Log != nil {
 				f.Log.Log(logging.Info, e.ID, "Tunnel Client", line, map[string]any{"stream": stream})
