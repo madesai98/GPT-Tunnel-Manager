@@ -19,7 +19,7 @@ var (
 	desktopGetWindowRect            = desktopUser32.NewProc("GetWindowRect")
 	desktopIsWindow                 = desktopUser32.NewProc("IsWindow")
 	desktopIsWindowVisible          = desktopUser32.NewProc("IsWindowVisible")
-	desktopShowWindow               = desktopUser32.NewProc("ShowWindow")
+	desktopShowWindowAsync          = desktopUser32.NewProc("ShowWindowAsync")
 	desktopSetForegroundWindow      = desktopUser32.NewProc("SetForegroundWindow")
 
 	desktopWindowStateMu sync.Mutex
@@ -126,10 +126,13 @@ func hideDesktopWindow() bool {
 		return false
 	}
 	rememberDesktopWindow(hwnd)
+
+	// ShowWindow can synchronously dispatch messages to Gio's window thread.
+	// When called while processing a Gio frame this can deadlock the UI. Queue
+	// the visibility change instead so the event loop remains free to process it.
 	const swHide = 0
-	desktopShowWindow.Call(hwnd, swHide)
-	visible, _, _ := desktopIsWindowVisible.Call(hwnd)
-	return visible == 0
+	queued, _, _ := desktopShowWindowAsync.Call(hwnd, swHide)
+	return queued != 0
 }
 
 func restoreDesktopWindow() bool {
@@ -141,10 +144,10 @@ func restoreDesktopWindow() bool {
 		return false
 	}
 	rememberDesktopWindow(hwnd)
+
 	const swShow = 5
-	desktopShowWindow.Call(hwnd, swShow)
-	visible, _, _ := desktopIsWindowVisible.Call(hwnd)
-	if visible == 0 {
+	queued, _, _ := desktopShowWindowAsync.Call(hwnd, swShow)
+	if queued == 0 {
 		return false
 	}
 	desktopSetForegroundWindow.Call(hwnd)
