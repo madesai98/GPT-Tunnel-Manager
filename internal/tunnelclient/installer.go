@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	proc "github.com/madesai98/GPT-Tunnel-Manager/internal/process"
 )
 
 const latestURL = "https://api.github.com/repos/openai/tunnel-client/releases/latest"
@@ -173,7 +175,7 @@ func (i *Installer) install(ctx context.Context, r Release) (Active, error) {
 func probeBinary(parent context.Context, path string) error {
 	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, path, "help", "quickstart")
+	cmd := proc.ConfigureCommand(exec.CommandContext(ctx, path, "help", "quickstart"))
 	cmd.Env = os.Environ()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		msg := strings.TrimSpace(string(out))

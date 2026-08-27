@@ -9,17 +9,27 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	proc "github.com/madesai98/GPT-Tunnel-Manager/internal/process"
 )
+
+func commandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
+	return proc.ConfigureCommand(exec.CommandContext(ctx, name, args...))
+}
+
+func command(name string, args ...string) *exec.Cmd {
+	return proc.ConfigureCommand(exec.Command(name, args...))
+}
 
 func OpenURL(ctx context.Context, raw string) error {
 	var c *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		c = exec.CommandContext(ctx, "rundll32", "url.dll,FileProtocolHandler", raw)
+		c = commandContext(ctx, "rundll32", "url.dll,FileProtocolHandler", raw)
 	case "darwin":
-		c = exec.CommandContext(ctx, "open", raw)
+		c = commandContext(ctx, "open", raw)
 	default:
-		c = exec.CommandContext(ctx, "xdg-open", raw)
+		c = commandContext(ctx, "xdg-open", raw)
 	}
 	return c.Start()
 }
@@ -37,9 +47,9 @@ func SetLaunchAtStartup(ctx context.Context, enabled bool, exe string) error {
 	case "windows":
 		key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
 		if enabled {
-			return exec.CommandContext(ctx, "reg", "add", key, "/v", "GPTTunnelManager", "/t", "REG_SZ", "/d", fmt.Sprintf("\"%s\"", exe), "/f").Run()
+			return commandContext(ctx, "reg", "add", key, "/v", "GPTTunnelManager", "/t", "REG_SZ", "/d", fmt.Sprintf("\"%s\"", exe), "/f").Run()
 		}
-		cmd := exec.CommandContext(ctx, "reg", "delete", key, "/v", "GPTTunnelManager", "/f")
+		cmd := commandContext(ctx, "reg", "delete", key, "/v", "GPTTunnelManager", "/f")
 		if out, err := cmd.CombinedOutput(); err != nil && !strings.Contains(strings.ToLower(string(out)), "unable to find") {
 			return err
 		}
@@ -80,7 +90,7 @@ func SetLaunchAtStartup(ctx context.Context, enabled bool, exe string) error {
 func LaunchAtStartupEnabled(exe string) (bool, error) {
 	switch runtime.GOOS {
 	case "windows":
-		out, err := exec.Command("reg", "query", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", "GPTTunnelManager").CombinedOutput()
+		out, err := command("reg", "query", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", "GPTTunnelManager").CombinedOutput()
 		return err == nil && strings.Contains(string(out), exe), nil
 	case "darwin":
 		home, err := os.UserHomeDir()
