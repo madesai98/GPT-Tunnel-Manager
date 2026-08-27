@@ -19,7 +19,7 @@ type Supervisor struct {
 	appCtx      context.Context
 	entry       config.ServerEntry
 	defaultIdle int
-	factory     *Factory
+	factory     RuntimeFactory
 	bus         *events.Bus
 
 	opMu sync.Mutex
@@ -38,7 +38,7 @@ type Supervisor struct {
 	activityTracking bool
 }
 
-func NewSupervisor(ctx context.Context, e config.ServerEntry, defaultIdle int, f *Factory, b *events.Bus) *Supervisor {
+func NewSupervisor(ctx context.Context, e config.ServerEntry, defaultIdle int, f RuntimeFactory, b *events.Bus) *Supervisor {
 	if ctx == nil {
 		ctx = context.Background()
 	}
