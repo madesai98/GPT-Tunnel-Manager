@@ -1,0 +1,299 @@
+name: One-shot app description copy update
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/one-shot-app-description-copy.yml
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - name: Install Gio Linux build dependencies
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+      - name: Apply requested changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          DESCRIPTION = "GTM PLUGIN | <server-id> | Follow the gpt-tunnel-manager-lifecycle skill before using this plugin"
+          DESCRIPTION_GO_SUFFIX = " | Follow the gpt-tunnel-manager-lifecycle skill before using this plugin"
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          # Desktop UI: copy the generated app description directly to the OS clipboard.
+          replace_once(
+              "cmd/tunnel-manager/desktop_servers.go",
+              'import (\n\t"context"\n\t"fmt"\n',
+              'import (\n\t"context"\n\t"fmt"\n\t"io"\n',
+          )
+          replace_once(
+              "cmd/tunnel-manager/desktop_servers.go",
+              '\t"gioui.org/layout"\n',
+              '\t"gioui.org/io/clipboard"\n\t"gioui.org/layout"\n',
+          )
+          replace_once(
+              "cmd/tunnel-manager/desktop_servers.go",
+              '''func (u *desktopUI) row(id string) *rowActions {
+          \tif actions := u.rows[id]; actions != nil {
+          \t\treturn actions
+          \t}
+          \tactions := new(rowActions)
+          \tu.rows[id] = actions
+          \treturn actions
+          }
+          ''',
+              '''func (u *desktopUI) row(id string) *rowActions {
+          \tif actions := u.rows[id]; actions != nil {
+          \t\treturn actions
+          \t}
+          \tactions := new(rowActions)
+          \tu.rows[id] = actions
+          \treturn actions
+          }
+
+          func copyAppDescription(gtx layout.Context, description string) {
+          \tgtx.Source.Execute(clipboard.WriteCmd{
+          \t\tType: "text/plain",
+          \t\tData: io.NopCloser(strings.NewReader(description)),
+          \t})
+          }
+          ''',
+          )
+          replace_once(
+              "cmd/tunnel-manager/desktop_servers.go",
+              '''\tfor actions.marker.Clicked(gtx) {
+          \t\tu.setMessage(marker.Generate(entry.ID))
+          \t}
+          ''',
+              '''\tfor actions.marker.Clicked(gtx) {
+          \t\tcopyAppDescription(gtx, marker.Generate(entry.ID))
+          \t\tu.setMessage("App description copied to clipboard.")
+          \t}
+          ''',
+          )
+          replace_once(
+              "cmd/tunnel-manager/desktop_servers.go",
+              'layout.Rigid(buttonInset(u.th, &actions.marker, "Marker")),',
+              'layout.Rigid(buttonInset(u.th, &actions.marker, "Copy App Description")),',
+          )
+          replace_once(
+              "cmd/tunnel-manager/desktop_servers.go",
+              '''\t\t} else {
+          \t\t\tu.setMessage(marker.Generate(form.id))
+          \t\t}
+          ''',
+              '''\t\t} else {
+          \t\t\tcopyAppDescription(gtx, marker.Generate(form.id))
+          \t\t\tu.setMessage("App description copied to clipboard.")
+          \t\t}
+          ''',
+          )
+          replace_once(
+              "cmd/tunnel-manager/desktop_servers.go",
+              'layout.Rigid(buttonInset(u.th, &form.lifecycleMarker, "Lifecycle Marker")),',
+              'layout.Rigid(buttonInset(u.th, &form.lifecycleMarker, "Copy App Description")),',
+          )
+
+          # One-line app-description marker.
+          Path("internal/marker/marker.go").write_text('''package marker
+
+import (
+\t"errors"
+\t"strings"
+)
+
+const (
+\tPrefix = "GTM PLUGIN | "
+\tSuffix = " | Follow the gpt-tunnel-manager-lifecycle skill before using this plugin"
+)
+
+func Generate(id string) string {
+\treturn Prefix + id + Suffix
+}
+
+func Parse(s string) (string, error) {
+\tstart := strings.Index(s, Prefix)
+\tif start < 0 {
+\t\treturn "", errors.New("GTM PLUGIN marker not found")
+\t}
+\trest := s[start+len(Prefix):]
+\tend := strings.Index(rest, Suffix)
+\tif end < 0 {
+\t\treturn "", errors.New("GTM PLUGIN marker not found")
+\t}
+\tid := strings.TrimSpace(rest[:end])
+\tif id == "" || strings.Contains(id, "|") {
+\t\treturn "", errors.New("GTM PLUGIN marker not found")
+\t}
+\treturn id, nil
+}
+''')
+
+          Path("internal/marker/marker_test.go").write_text('''package marker
+
+import "testing"
+
+func TestGenerateOneLineAppDescription(t *testing.T) {
+\tid := "srv_0123456789abcdef0123456789abcdef"
+\twant := "GTM PLUGIN | " + id + " | Follow the gpt-tunnel-manager-lifecycle skill before using this plugin"
+\tif got := Generate(id); got != want {
+\t\tt.Fatalf("Generate() = %q, want %q", got, want)
+\t}
+}
+
+func TestRoundTrip(t *testing.T) {
+\tid := "srv_0123456789abcdef0123456789abcdef"
+\tgot, err := Parse(Generate(id))
+\tif err != nil || got != id {
+\t\tt.Fatalf("got %q err %v", got, err)
+\t}
+}
+
+func TestParseEmbeddedDescription(t *testing.T) {
+\tid := "srv_0123456789abcdef0123456789abcdef"
+\tdescription := "Extra text. " + Generate(id) + " More text."
+\tgot, err := Parse(description)
+\tif err != nil || got != id {
+\t\tt.Fatalf("got %q err %v", got, err)
+\t}
+}
+''')
+
+          old_skill_sentence = "When a Developer Plugin description contains `GTM_SERVER_ID=<server-id>`, treat it as participating in GPT Tunnel Manager lifecycle control."
+          new_skill_sentence = f"When a Developer Plugin description contains `{DESCRIPTION}`, treat it as participating in GPT Tunnel Manager lifecycle control. The `<server-id>` segment is the exact immutable Server ID passed to Manager lifecycle tools."
+          replace_once("assets/lifecycle-skill/SKILL.md", old_skill_sentence, new_skill_sentence)
+          replace_once(
+              "internal/lifecycleskill/skill.go",
+              'When a Developer Plugin description contains ` + "`GTM_SERVER_ID=<server-id>`" + `, treat it as participating in GPT Tunnel Manager lifecycle control.',
+              'When a Developer Plugin description contains ` + "`GTM PLUGIN | <server-id> | Follow the gpt-tunnel-manager-lifecycle skill before using this plugin`" + `, treat it as participating in GPT Tunnel Manager lifecycle control. The ` + "`<server-id>`" + ` segment is the exact immutable Server ID passed to Manager lifecycle tools.',
+          )
+
+          old_block = '''```text
+          Managed by GPT Tunnel Manager.
+          GTM_SERVER_ID=<server-id>
+          Follow the GPT Tunnel Manager Lifecycle Skill before using this plugin.
+          ```'''
+          new_block = f'''```text
+          {DESCRIPTION}
+          ```'''
+          replace_once("README.md", old_block, new_block)
+          replace_once("CONTEXT.md", old_block, new_block)
+          replace_once("docs/adr/0004-self-identify-managed-developer-plugins-by-server-id.md", old_block, new_block)
+          replace_once("docs/IMPLEMENTATION_PLAN.md", old_block, new_block)
+
+          replace_once(
+              "README.md",
+              "6. Put this marker in every participating Developer Plugin description:",
+              "6. Put this one-line app description in every participating Developer Plugin description:",
+          )
+          replace_once(
+              "docs/adr/0004-self-identify-managed-developer-plugins-by-server-id.md",
+              "The required block is:",
+              "The required one-line app description is:",
+          )
+          replace_once(
+              "docs/adr/0004-self-identify-managed-developer-plugins-by-server-id.md",
+              "When ChatGPT is about to use a participating Developer Plugin, the Lifecycle Skill reads `GTM_SERVER_ID`, queries the Manager MCP with that ID, and follows the lifecycle behavior appropriate to the Server Entry's reported mode and state before proceeding to the target plugin.",
+              "When ChatGPT is about to use a participating Developer Plugin, the Lifecycle Skill reads the Server ID from the `GTM PLUGIN` app description, queries the Manager MCP with that ID, and follows the lifecycle behavior appropriate to the Server Entry's reported mode and state before proceeding to the target plugin.",
+          )
+
+          Path(".github/release-page.json").write_text('''{
+            "version": "v1.0.24",
+            "title": "GPT Tunnel Manager v1.0.24"
+          }
+          ''')
+          Path(".github/release-page.md").write_text('''# GPT Tunnel Manager v1.0.24
+
+## Copyable one-line app descriptions
+
+This release makes the per-server Developer Plugin app description directly usable from the native UI.
+
+- Renames the server `Marker` and editor `Lifecycle Marker` buttons to `Copy App Description`.
+- Clicking `Copy App Description` now writes the generated description directly to the system clipboard instead of only showing it in the status message.
+- Changes the generated description to the single-line format `GTM PLUGIN | srv_... | Follow the gpt-tunnel-manager-lifecycle skill before using this plugin` so it works in app-description fields that do not preserve newlines.
+- Updates marker parsing and tests for the new one-line format.
+- Updates both the installable lifecycle skill and the compiled packaged skill copy to recognize the new `GTM PLUGIN` format.
+- Updates README, architecture context, ADR 0004, and the implementation contract to document the one-line app description.
+
+## Included builds
+
+- Windows x64
+- Windows ARM64
+- Linux x64
+- Linux ARM64
+- macOS Intel x64
+- macOS Apple Silicon ARM64
+- Source archives
+- `SHA256SUMS.txt`
+
+## Changes since v1.0.23
+
+- Copy Developer Plugin app descriptions directly to the clipboard.
+- Replace the multiline `GTM_SERVER_ID` marker with the condensed one-line `GTM PLUGIN` description.
+- Keep the lifecycle skill and packaged documentation aligned with the new description format.
+''')
+          Path(".github/release-trigger.json").write_text('''{
+            "version": "v1.0.24",
+            "requested_at": "2026-08-27"
+          }
+          ''')
+          PY
+
+          gofmt -w cmd/tunnel-manager/desktop_servers.go internal/marker/marker.go internal/marker/marker_test.go internal/lifecycleskill/skill.go
+
+          if git grep -n -E 'GTM_SERVER_ID=|Managed by GPT Tunnel Manager\.' -- ':!/.github/release-page.md'; then
+            echo "Legacy multiline marker text remains in tracked source/docs." >&2
+            exit 1
+          fi
+
+      - name: Verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+          go test ./...
+          go vet ./...
+          go build ./cmd/tunnel-manager
+      - name: Commit requested changes
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one-shot-app-description-copy.yml
+          git add cmd/tunnel-manager/desktop_servers.go internal/marker/marker.go internal/marker/marker_test.go assets/lifecycle-skill/SKILL.md internal/lifecycleskill/skill.go README.md CONTEXT.md docs/adr/0004-self-identify-managed-developer-plugins-by-server-id.md docs/IMPLEMENTATION_PLAN.md .github/release-page.json .github/release-page.md .github/release-trigger.json
+          git commit -m "feat: copy one-line app descriptions"
+          git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Start v1.0.24 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh workflow run release.yml --ref main -f version=v1.0.24
