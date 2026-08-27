@@ -11,6 +11,7 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -119,12 +120,21 @@ func runDesktop(core *coreapp.App, setFocus func(func())) error {
 		setFocus(u.showWindow)
 	}
 
-	startTray, stopTray := systray.RunWithExternalLoop(u.trayReady, func() {})
-	startTray()
+	// On Windows, the systray HWND and its GetMessage loop must live on the
+	// same OS thread. RunWithExternalLoop creates the HWND during Register but
+	// starts GetMessage from another goroutine, which leaves tray click/menu
+	// messages on the original thread. Give systray its own locked OS thread
+	// and let its normal Run loop create and service the HWND there.
+	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		systray.Run(u.trayReady, func() {})
+	}()
+
 	go func() {
 		err := <-done
 		close(u.trayStop)
-		stopTray()
+		systray.Quit()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "desktop:", err)
 			os.Exit(1)
@@ -262,19 +272,43 @@ func (u *desktopUI) runWindow() error {
 }
 
 func (u *desktopUI) handleShowRequest(win *gioapp.Window) {
-	u.mu.RLock()
-	hidden := u.windowHidden
-	u.mu.RUnlock()
-	if hidden {
-		return
-	}
 	select {
 	case <-u.showReq:
-		win.Option(gioapp.Windowed.Option())
-		win.Perform(system.ActionRaise)
-		win.Invalidate()
 	default:
+		return
 	}
+
+	u.mu.RLock()
+	hidden := u.windowHidden
+	exiting := u.exiting
+	u.mu.RUnlock()
+	if exiting {
+		return
+	}
+
+	if hidden {
+		if !keepDesktopWindowAliveForTray() {
+			// Non-Windows tray hiding closes the native window. Leave the show
+			// request queued so the outer loop can recreate it after DestroyEvent.
+			u.signalShow()
+			return
+		}
+		if !restoreDesktopWindow() {
+			u.mu.Lock()
+			u.message = "Unable to restore GPT Tunnel Manager from the system tray."
+			u.mu.Unlock()
+			win.Invalidate()
+			return
+		}
+		u.mu.Lock()
+		u.windowHidden = false
+		u.hidePending = false
+		u.mu.Unlock()
+	}
+
+	win.Option(gioapp.Windowed.Option())
+	win.Perform(system.ActionRaise)
+	win.Invalidate()
 }
 
 func (u *desktopUI) signalShow() {
