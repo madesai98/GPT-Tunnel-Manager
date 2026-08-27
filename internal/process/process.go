@@ -18,10 +18,12 @@ type Spec struct {
 	Dir        string
 	Env        []string
 }
+
 type Line struct {
 	Stream string
 	Text   string
 }
+
 type Managed struct {
 	mu       sync.RWMutex
 	cmd      *exec.Cmd
@@ -72,6 +74,7 @@ func Start(spec Spec, onLine func(Line)) (*Managed, error) {
 	}()
 	return m, nil
 }
+
 func scan(r io.Reader, stream string, fn func(Line)) {
 	if fn == nil {
 		return
@@ -80,9 +83,20 @@ func scan(r io.Reader, stream string, fn func(Line)) {
 	buf := make([]byte, 0, 64*1024)
 	s.Buffer(buf, 1024*1024)
 	for s.Scan() {
-		fn(Line{Stream: stream, Text: s.Text()})
+		invokeLineCallback(fn, Line{Stream: stream, Text: s.Text()})
 	}
 }
+
+// A log/parser callback is diagnostic plumbing and must never be able to take
+// down the Manager process. A child can emit arbitrary stderr/stdout, so keep a
+// panic in that callback contained to the scan goroutine.
+func invokeLineCallback(fn func(Line), line Line) {
+	defer func() {
+		_ = recover()
+	}()
+	fn(line)
+}
+
 func (m *Managed) PID() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -91,15 +105,25 @@ func (m *Managed) PID() int {
 	}
 	return m.cmd.Process.Pid
 }
+
 func (m *Managed) Done() <-chan struct{} { return m.done }
+
 func (m *Managed) Err() error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.waitErr
 }
+
 func (m *Managed) Stop(ctx context.Context, grace time.Duration) error {
 	var stopErr error
 	m.stopOnce.Do(func() {
+		// If Wait has already completed, do not act on the old PID. Besides
+		// being unnecessary, a stale PID can be recycled by the OS.
+		select {
+		case <-m.done:
+			return
+		default:
+		}
 		if grace <= 0 {
 			grace = 10 * time.Second
 		}
