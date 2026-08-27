@@ -19,6 +19,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh api --method PATCH \
-            repos/${GITHUB_REPOSITORY}/releases/377509535 \
-            -F draft=false
+          gh release edit v1.0.5 --draft=false --repo "$GITHUB_REPOSITORY"
