@@ -84,9 +84,7 @@ A per-server Developer Plugin whose description contains the Lifecycle Marker fo
 The standard description block:
 
 ```text
-Managed by GPT Tunnel Manager.
-GTM_SERVER_ID=<server-id>
-Follow the GPT Tunnel Manager Lifecycle Skill before using this plugin.
+GTM PLUGIN | <server-id> | Follow the gpt-tunnel-manager-lifecycle skill before using this plugin
 ```
 
 The immutable Server ID is authoritative; plugin display names are informational only.

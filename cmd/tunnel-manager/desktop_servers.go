@@ -5,10 +5,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
 
+	"gioui.org/io/clipboard"
 	"gioui.org/layout"
 	"gioui.org/unit"
 	"gioui.org/widget"
@@ -159,6 +161,13 @@ func (u *desktopUI) row(id string) *rowActions {
 	return actions
 }
 
+func copyAppDescription(gtx layout.Context, description string) {
+	gtx.Source.Execute(clipboard.WriteCmd{
+		Type: "text/plain",
+		Data: io.NopCloser(strings.NewReader(description)),
+	})
+}
+
 func (u *desktopUI) serverRow(gtx layout.Context, entry config.ServerEntry, snapshot servers.Snapshot) layout.Dimensions {
 	actions := u.row(entry.ID)
 	for actions.start.Clicked(gtx) {
@@ -174,7 +183,8 @@ func (u *desktopUI) serverRow(gtx layout.Context, entry config.ServerEntry, snap
 		u.editServer(entry)
 	}
 	for actions.marker.Clicked(gtx) {
-		u.setMessage(marker.Generate(entry.ID))
+		copyAppDescription(gtx, marker.Generate(entry.ID))
+		u.setMessage("App description copied to clipboard.")
 	}
 	for actions.delete.Clicked(gtx) {
 		entryID := entry.ID
@@ -201,7 +211,7 @@ func (u *desktopUI) serverRow(gtx layout.Context, entry config.ServerEntry, snap
 						layout.Rigid(buttonInset(u.th, &actions.stop, "Stop")),
 						layout.Rigid(buttonInset(u.th, &actions.restart, "Restart")),
 						layout.Rigid(buttonInset(u.th, &actions.edit, "Edit")),
-						layout.Rigid(buttonInset(u.th, &actions.marker, "Marker")),
+						layout.Rigid(buttonInset(u.th, &actions.marker, "Copy App Description")),
 						layout.Rigid(buttonInset(u.th, &actions.delete, "Delete")),
 					)
 				})
@@ -293,7 +303,8 @@ func (u *desktopUI) serverEditor(gtx layout.Context) layout.Dimensions {
 		if form.id == "" {
 			u.setMessage("Save the entry first to generate an immutable Server ID.")
 		} else {
-			u.setMessage(marker.Generate(form.id))
+			copyAppDescription(gtx, marker.Generate(form.id))
+			u.setMessage("App description copied to clipboard.")
 		}
 	}
 	for form.save.Clicked(gtx) {
@@ -366,7 +377,7 @@ func (u *desktopUI) serverEditor(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{}.Layout(gtx,
 						layout.Rigid(material.Button(u.th, &form.cancel, "Cancel").Layout),
-						layout.Rigid(buttonInset(u.th, &form.lifecycleMarker, "Lifecycle Marker")),
+						layout.Rigid(buttonInset(u.th, &form.lifecycleMarker, "Copy App Description")),
 						layout.Rigid(buttonInset(u.th, &form.save, "Save")),
 					)
 				})

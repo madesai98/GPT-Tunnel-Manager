@@ -233,9 +233,7 @@ Configured downstream Server Entries follow the built-in row and retain their no
 Participating per-server Developer Plugins contain:
 
 ```text
-Managed by GPT Tunnel Manager.
-GTM_SERVER_ID=<server-id>
-Follow the GPT Tunnel Manager Lifecycle Skill before using this plugin.
+GTM PLUGIN | <server-id> | Follow the gpt-tunnel-manager-lifecycle skill before using this plugin
 ```
 
 The Manager Developer Plugin does not carry the marker.

@@ -5,7 +5,7 @@ description: Preflight Developer Plugins managed by GPT Tunnel Manager before us
 
 # GPT Tunnel Manager Lifecycle
 
-When a Developer Plugin description contains `GTM_SERVER_ID=<server-id>`, treat it as participating in GPT Tunnel Manager lifecycle control.
+When a Developer Plugin description contains `GTM PLUGIN | <server-id> | Follow the gpt-tunnel-manager-lifecycle skill before using this plugin`, treat it as participating in GPT Tunnel Manager lifecycle control. The `<server-id>` segment is the exact immutable Server ID passed to Manager lifecycle tools.
 
 1. Call the Manager Developer Plugin `get_status` for the exact immutable Server ID before using the target plugin.
 2. If the Manager Developer Plugin is unreachable, tell the user GPT Tunnel Manager must be running and do not call the target plugin.

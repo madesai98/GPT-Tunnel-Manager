@@ -66,12 +66,10 @@ printf '%s' "$CONTROL_PLANE_API_KEY" | tunnel-manager secret put secret://openai
 3. Start GPT Tunnel Manager. In Settings, paste only the Runtime API key value into `OpenAI Runtime API Key` and choose `Store API Key`.
 4. Configure the Manager Tunnel ID. The Manager credential reference is fixed internally as `secret://openai/runtime/default`; the UI does not ask you to type it.
 5. Add Server Entries. Their tunnel runtimes use the Manager Runtime API key by default. Create one ChatGPT Developer Mode plugin per Server Entry.
-6. Put this marker in every participating Developer Plugin description:
+6. Put this one-line app description in every participating Developer Plugin description:
 
 ```text
-Managed by GPT Tunnel Manager.
-GTM_SERVER_ID=<server-id>
-Follow the GPT Tunnel Manager Lifecycle Skill before using this plugin.
+GTM PLUGIN | <server-id> | Follow the gpt-tunnel-manager-lifecycle skill before using this plugin
 ```
 
 7. Install `assets/lifecycle-skill/SKILL.md` separately as the generic lifecycle skill. The Manager Developer Plugin itself only connects to the Manager tunnel and exposes the four Manager MCP tools.
