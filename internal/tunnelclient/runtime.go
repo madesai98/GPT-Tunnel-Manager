@@ -31,8 +31,14 @@ type RunSpec struct {
 	OnLog               func(stream, line string)
 }
 
+type managedProcess interface {
+	Done() <-chan struct{}
+	Err() error
+	Stop(context.Context, time.Duration) error
+}
+
 type Runtime struct {
-	p               *proc.Managed
+	p               managedProcess
 	healthURL       string
 	activity        chan time.Time
 	tracking        bool
