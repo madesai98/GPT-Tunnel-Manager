@@ -1,0 +1,353 @@
+name: Tray Restore Hotfix
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/tray-restore-hotfix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: true
+      - name: Install Gio Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+      - name: Apply tray restore fix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("cmd/tunnel-manager/desktop_gio.go")
+          text = path.read_text()
+
+          old_show = '''func (u *desktopUI) showWindow() {
+          \tu.mu.RLock()
+          \texiting := u.exiting
+          \thidden := u.windowHidden
+          \twin := u.win
+          \tu.mu.RUnlock()
+          \tif exiting {
+          \t\treturn
+          \t}
+          \tif !hidden && win != nil {
+          \t\twin.Option(gioapp.Windowed.Option())
+          \t\twin.Perform(system.ActionRaise)
+          \t\twin.Invalidate()
+          \t\treturn
+          \t}
+          \tu.signalShow()
+          \tif win != nil {
+          \t\twin.Invalidate()
+          \t}
+          }
+          '''
+          new_show = '''func (u *desktopUI) showWindow() {
+          \tu.mu.RLock()
+          \texiting := u.exiting
+          \thidden := u.windowHidden
+          \twin := u.win
+          \tu.mu.RUnlock()
+          \tif exiting {
+          \t\treturn
+          \t}
+          \tif hidden && win != nil && restoreDesktopWindow() {
+          \t\tu.mu.Lock()
+          \t\tu.windowHidden = false
+          \t\tu.mu.Unlock()
+          \t\twin.Option(gioapp.Windowed.Option())
+          \t\twin.Perform(system.ActionRaise)
+          \t\twin.Invalidate()
+          \t\treturn
+          \t}
+          \tif !hidden && win != nil {
+          \t\twin.Option(gioapp.Windowed.Option())
+          \t\twin.Perform(system.ActionRaise)
+          \t\twin.Invalidate()
+          \t\treturn
+          \t}
+          \tu.signalShow()
+          \tif win != nil {
+          \t\twin.Invalidate()
+          \t}
+          }
+          '''
+
+          old_hide = '''func (u *desktopUI) hideToTray() {
+          \tu.mu.Lock()
+          \tif u.windowHidden || u.exiting || u.win == nil {
+          \t\tu.mu.Unlock()
+          \t\treturn
+          \t}
+          \twin := u.win
+          \tu.windowHidden = true
+          \tu.mu.Unlock()
+          \twin.Perform(system.ActionClose)
+          }
+          '''
+          new_hide = '''func (u *desktopUI) hideToTray() {
+          \tu.mu.Lock()
+          \tif u.windowHidden || u.exiting || u.win == nil {
+          \t\tu.mu.Unlock()
+          \t\treturn
+          \t}
+          \twin := u.win
+          \tu.windowHidden = true
+          \tu.mu.Unlock()
+          \tif hideDesktopWindow() {
+          \t\treturn
+          \t}
+          \twin.Perform(system.ActionClose)
+          }
+          '''
+
+          if text.count(old_show) != 1:
+              raise SystemExit("showWindow block did not match exactly once")
+          if text.count(old_hide) != 1:
+              raise SystemExit("hideToTray block did not match exactly once")
+          path.write_text(text.replace(old_show, new_show).replace(old_hide, new_hide))
+
+          Path("cmd/tunnel-manager/desktop_window_windows.go").write_text('''//go:build windows && !nogui
+
+          package main
+
+          import (
+          \t"unsafe"
+
+          \t"golang.org/x/sys/windows"
+          )
+
+          var (
+          \tdesktopUser32              = windows.NewLazySystemDLL("user32.dll")
+          \tdesktopFindWindowW         = desktopUser32.NewProc("FindWindowW")
+          \tdesktopShowWindow          = desktopUser32.NewProc("ShowWindow")
+          \tdesktopSetForegroundWindow = desktopUser32.NewProc("SetForegroundWindow")
+          )
+
+          func desktopWindowHandle() uintptr {
+          \ttitle, err := windows.UTF16PtrFromString("GPT Tunnel Manager")
+          \tif err != nil {
+          \t\treturn 0
+          \t}
+          \thwnd, _, _ := desktopFindWindowW.Call(0, uintptr(unsafe.Pointer(title)))
+          \treturn hwnd
+          }
+
+          func hideDesktopWindow() bool {
+          \thwnd := desktopWindowHandle()
+          \tif hwnd == 0 {
+          \t\treturn false
+          \t}
+          \tconst swHide = 0
+          \tdesktopShowWindow.Call(hwnd, swHide)
+          \treturn true
+          }
+
+          func restoreDesktopWindow() bool {
+          \thwnd := desktopWindowHandle()
+          \tif hwnd == 0 {
+          \t\treturn false
+          \t}
+          \tconst swShow = 5
+          \tdesktopShowWindow.Call(hwnd, swShow)
+          \tdesktopSetForegroundWindow.Call(hwnd)
+          \treturn true
+          }
+          ''')
+
+          Path("cmd/tunnel-manager/desktop_window_other.go").write_text('''//go:build !windows && !nogui
+
+          package main
+
+          func hideDesktopWindow() bool { return false }
+
+          func restoreDesktopWindow() bool { return false }
+          ''')
+      - name: Format
+        shell: bash
+        run: gofmt -w cmd/tunnel-manager/desktop_gio.go cmd/tunnel-manager/desktop_window_windows.go cmd/tunnel-manager/desktop_window_other.go
+      - name: Test
+        run: go test ./...
+      - name: Build native desktop app
+        run: go build ./cmd/tunnel-manager
+
+  commit:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Apply tray restore fix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("cmd/tunnel-manager/desktop_gio.go")
+          text = path.read_text()
+
+          old_show = '''func (u *desktopUI) showWindow() {
+          \tu.mu.RLock()
+          \texiting := u.exiting
+          \thidden := u.windowHidden
+          \twin := u.win
+          \tu.mu.RUnlock()
+          \tif exiting {
+          \t\treturn
+          \t}
+          \tif !hidden && win != nil {
+          \t\twin.Option(gioapp.Windowed.Option())
+          \t\twin.Perform(system.ActionRaise)
+          \t\twin.Invalidate()
+          \t\treturn
+          \t}
+          \tu.signalShow()
+          \tif win != nil {
+          \t\twin.Invalidate()
+          \t}
+          }
+          '''
+          new_show = '''func (u *desktopUI) showWindow() {
+          \tu.mu.RLock()
+          \texiting := u.exiting
+          \thidden := u.windowHidden
+          \twin := u.win
+          \tu.mu.RUnlock()
+          \tif exiting {
+          \t\treturn
+          \t}
+          \tif hidden && win != nil && restoreDesktopWindow() {
+          \t\tu.mu.Lock()
+          \t\tu.windowHidden = false
+          \t\tu.mu.Unlock()
+          \t\twin.Option(gioapp.Windowed.Option())
+          \t\twin.Perform(system.ActionRaise)
+          \t\twin.Invalidate()
+          \t\treturn
+          \t}
+          \tif !hidden && win != nil {
+          \t\twin.Option(gioapp.Windowed.Option())
+          \t\twin.Perform(system.ActionRaise)
+          \t\twin.Invalidate()
+          \t\treturn
+          \t}
+          \tu.signalShow()
+          \tif win != nil {
+          \t\twin.Invalidate()
+          \t}
+          }
+          '''
+
+          old_hide = '''func (u *desktopUI) hideToTray() {
+          \tu.mu.Lock()
+          \tif u.windowHidden || u.exiting || u.win == nil {
+          \t\tu.mu.Unlock()
+          \t\treturn
+          \t}
+          \twin := u.win
+          \tu.windowHidden = true
+          \tu.mu.Unlock()
+          \twin.Perform(system.ActionClose)
+          }
+          '''
+          new_hide = '''func (u *desktopUI) hideToTray() {
+          \tu.mu.Lock()
+          \tif u.windowHidden || u.exiting || u.win == nil {
+          \t\tu.mu.Unlock()
+          \t\treturn
+          \t}
+          \twin := u.win
+          \tu.windowHidden = true
+          \tu.mu.Unlock()
+          \tif hideDesktopWindow() {
+          \t\treturn
+          \t}
+          \twin.Perform(system.ActionClose)
+          }
+          '''
+
+          if text.count(old_show) != 1:
+              raise SystemExit("showWindow block did not match exactly once")
+          if text.count(old_hide) != 1:
+              raise SystemExit("hideToTray block did not match exactly once")
+          path.write_text(text.replace(old_show, new_show).replace(old_hide, new_hide))
+
+          Path("cmd/tunnel-manager/desktop_window_windows.go").write_text('''//go:build windows && !nogui
+
+          package main
+
+          import (
+          \t"unsafe"
+
+          \t"golang.org/x/sys/windows"
+          )
+
+          var (
+          \tdesktopUser32              = windows.NewLazySystemDLL("user32.dll")
+          \tdesktopFindWindowW         = desktopUser32.NewProc("FindWindowW")
+          \tdesktopShowWindow          = desktopUser32.NewProc("ShowWindow")
+          \tdesktopSetForegroundWindow = desktopUser32.NewProc("SetForegroundWindow")
+          )
+
+          func desktopWindowHandle() uintptr {
+          \ttitle, err := windows.UTF16PtrFromString("GPT Tunnel Manager")
+          \tif err != nil {
+          \t\treturn 0
+          \t}
+          \thwnd, _, _ := desktopFindWindowW.Call(0, uintptr(unsafe.Pointer(title)))
+          \treturn hwnd
+          }
+
+          func hideDesktopWindow() bool {
+          \thwnd := desktopWindowHandle()
+          \tif hwnd == 0 {
+          \t\treturn false
+          \t}
+          \tconst swHide = 0
+          \tdesktopShowWindow.Call(hwnd, swHide)
+          \treturn true
+          }
+
+          func restoreDesktopWindow() bool {
+          \thwnd := desktopWindowHandle()
+          \tif hwnd == 0 {
+          \t\treturn false
+          \t}
+          \tconst swShow = 5
+          \tdesktopShowWindow.Call(hwnd, swShow)
+          \tdesktopSetForegroundWindow.Call(hwnd)
+          \treturn true
+          }
+          ''')
+
+          Path("cmd/tunnel-manager/desktop_window_other.go").write_text('''//go:build !windows && !nogui
+
+          package main
+
+          func hideDesktopWindow() bool { return false }
+
+          func restoreDesktopWindow() bool { return false }
+          ''')
+      - name: Format and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w cmd/tunnel-manager/desktop_gio.go cmd/tunnel-manager/desktop_window_windows.go cmd/tunnel-manager/desktop_window_other.go
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cmd/tunnel-manager/desktop_gio.go cmd/tunnel-manager/desktop_window_windows.go cmd/tunnel-manager/desktop_window_other.go
+          git commit -m "Fix tray window restore on Windows"
+          git push origin HEAD:main
