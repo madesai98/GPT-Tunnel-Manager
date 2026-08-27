@@ -1,60 +1,134 @@
 package mcpmanager
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"net"
 	"net/http"
-	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/buildinfo"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/lifecycle"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/servers"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const (
-	legacyProtocolVersion = "2025-06-18"
-	modernProtocolVersion = "2026-07-28"
-	discoveryTTLMillis     = 5 * 60 * 1000
-)
+const managerInstructions = "Manage GPT Tunnel Manager server lifecycle state."
 
 type Server struct {
 	registry  *servers.Registry
+	mcp       *mcp.Server
 	http      *http.Server
 	ln        net.Listener
 	url       string
 	accepting atomic.Bool
 }
 
-type rpcRequest struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params,omitempty"`
+type statusInput struct {
+	ServerID       string `json:"server_id,omitempty" jsonschema:"Immutable configured server ID. Omit to list all configured servers."`
+	WaitForReady   bool   `json:"wait_for_ready,omitempty" jsonschema:"Wait for the selected server to become ready, degraded, or stopped before returning."`
+	TimeoutSeconds *int   `json:"timeout_seconds,omitempty" jsonschema:"Maximum number of seconds to wait when wait_for_ready is true. Allowed range is 1 through 60; defaults to 30."`
 }
 
-type rpcResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"`
-	Result  any             `json:"result,omitempty"`
-	Error   *rpcError       `json:"error,omitempty"`
+type mutationInput struct {
+	ServerID string `json:"server_id" jsonschema:"Immutable configured server ID."`
 }
 
-type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-	Data    any    `json:"data,omitempty"`
+type statusOutput struct {
+	Servers []servers.Snapshot `json:"servers,omitempty" jsonschema:"Configured server lifecycle snapshots when no server_id was supplied."`
+	Server  *servers.Snapshot  `json:"server,omitempty" jsonschema:"Lifecycle snapshot for the selected server."`
+	Error   *toolError          `json:"error,omitempty" jsonschema:"Stable tool error details when the operation failed."`
+}
+
+type mutationOutput struct {
+	Server *servers.Snapshot `json:"server,omitempty" jsonschema:"Lifecycle snapshot after the requested operation."`
+	Error  *toolError         `json:"error,omitempty" jsonschema:"Stable tool error details when the operation failed."`
+}
+
+type toolError struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	Retryable bool   `json:"retryable"`
 }
 
 func New(r *servers.Registry) *Server {
 	s := &Server{registry: r}
 	s.accepting.Store(true)
+	s.mcp = mcp.NewServer(
+		&mcp.Implementation{Name: "gpt-tunnel-manager", Version: buildinfo.Version},
+		&mcp.ServerOptions{
+			Instructions: managerInstructions,
+			// The Manager MCP only exposes tools. Explicitly suppress the SDK's
+			// historical default logging capability; tool capability metadata is
+			// inferred from the registrations below.
+			Capabilities: &mcp.ServerCapabilities{},
+		},
+	)
+	s.registerTools()
 	return s
+}
+
+func (s *Server) registerTools() {
+	closedWorld := false
+	nondestructive := false
+	destructive := true
+
+	mcp.AddTool(s.mcp, &mcp.Tool{
+		Name:        "get_status",
+		Title:       "Get manager status",
+		Description: "Get GPT Tunnel Manager server lifecycle status. Optionally wait for one configured server to become ready.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Get manager status",
+			ReadOnlyHint:    true,
+			IdempotentHint:  true,
+			DestructiveHint: &nondestructive,
+			OpenWorldHint:   &closedWorld,
+		},
+	}, s.getStatus)
+
+	mcp.AddTool(s.mcp, mutationTool(
+		"start",
+		"Start managed server",
+		"Start one enabled Managed server entry by immutable server ID.",
+		&nondestructive,
+	), func(ctx context.Context, _ *mcp.CallToolRequest, input mutationInput) (*mcp.CallToolResult, mutationOutput, error) {
+		return s.mutate(ctx, "start", input)
+	})
+
+	mcp.AddTool(s.mcp, mutationTool(
+		"restart",
+		"Restart managed server",
+		"Restart one enabled Managed server entry by immutable server ID.",
+		&destructive,
+	), func(ctx context.Context, _ *mcp.CallToolRequest, input mutationInput) (*mcp.CallToolResult, mutationOutput, error) {
+		return s.mutate(ctx, "restart", input)
+	})
+
+	mcp.AddTool(s.mcp, mutationTool(
+		"shutdown",
+		"Shut down managed server",
+		"Stop one enabled Managed server entry by immutable server ID.",
+		&destructive,
+	), func(ctx context.Context, _ *mcp.CallToolRequest, input mutationInput) (*mcp.CallToolResult, mutationOutput, error) {
+		return s.mutate(ctx, "shutdown", input)
+	})
+}
+
+func mutationTool(name, title, description string, destructive *bool) *mcp.Tool {
+	closedWorld := false
+	return &mcp.Tool{
+		Name:        name,
+		Title:       title,
+		Description: description,
+		Annotations: &mcp.ToolAnnotations{
+			Title:           title,
+			ReadOnlyHint:    false,
+			IdempotentHint:  true,
+			DestructiveHint: destructive,
+			OpenWorldHint:   &closedWorld,
+		},
+	}
 }
 
 func (s *Server) Start() error {
@@ -65,11 +139,35 @@ func (s *Server) Start() error {
 	s.ln = ln
 	s.url = "http://" + ln.Addr().String() + "/mcp"
 	s.accepting.Store(true)
+
+	mcpHandler := mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return s.mcp },
+		&mcp.StreamableHTTPOptions{
+			Stateless:                    true,
+			JSONResponse:                 true,
+			MaxRequestBodyBytes:          2 << 20,
+			PropagateRequestCancellation: true,
+		},
+	)
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/mcp", s.handle)
+	mux.Handle("/mcp", rejectBrowserOrigins(mcpHandler))
 	s.http = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = s.http.Serve(ln) }()
 	return nil
+}
+
+func rejectBrowserOrigins(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The Manager endpoint is only for the locally-owned tunnel client.
+		// Reject browser-originated requests so arbitrary sites cannot use
+		// localhost as a bridge to enumerate or mutate lifecycle state.
+		if r.Header.Get("Origin") != "" {
+			http.Error(w, "browser origins are not accepted", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) URL() string { return s.url }
@@ -82,249 +180,98 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
-	// This endpoint is for the locally-owned tunnel-client, not web pages.
-	// Reject browser-originated traffic so arbitrary sites cannot use localhost
-	// as a bridge to enumerate or mutate configured server lifecycle state.
-	if r.Header.Get("Origin") != "" {
-		http.Error(w, "browser origins are not accepted", http.StatusForbidden)
-		return
+func (s *Server) getStatus(ctx context.Context, _ *mcp.CallToolRequest, input statusInput) (*mcp.CallToolResult, statusOutput, error) {
+	if s.registry == nil {
+		return statusFailure(errors.New("manager_registry_unavailable"))
 	}
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
+	if input.ServerID == "" {
+		if input.WaitForReady {
+			return statusFailure(errors.New("server_id_required_for_wait"))
+		}
+		return nil, statusOutput{Servers: s.registry.List()}, nil
 	}
-	if r.Method == http.MethodDelete {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	if r.Method != http.MethodPost {
-		// The embedded Manager MCP is intentionally stateless and does not offer
-		// a server-to-client SSE stream. In particular, do not advertise an
-		// Mcp-Session-Id during initialize unless GET/SSE session semantics are
-		// actually implemented.
-		w.Header().Set("Allow", "POST, OPTIONS, DELETE")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
+
+	sup, err := s.registry.Get(input.ServerID)
 	if err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
+		return statusFailure(err)
 	}
-	var req rpcRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		s.write(w, rpcResponse{JSONRPC: "2.0", Error: &rpcError{Code: -32700, Message: "parse error"}})
-		return
+	snap := sup.Snapshot()
+	if input.WaitForReady && !snap.Ready {
+		timeout := 30
+		if input.TimeoutSeconds != nil {
+			if *input.TimeoutSeconds < 1 || *input.TimeoutSeconds > 60 {
+				return statusFailure(errors.New("timeout_seconds_out_of_range"))
+			}
+			timeout = *input.TimeoutSeconds
+		}
+		waitCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+		defer cancel()
+		snap, _ = sup.Wait(waitCtx, func(x servers.Snapshot) bool {
+			return x.Ready || x.Observed == lifecycle.Degraded || x.Observed == lifecycle.Stopped
+		})
 	}
-	if req.Method == "notifications/initialized" || strings.HasPrefix(req.Method, "notifications/") {
-		w.WriteHeader(http.StatusAccepted)
-		return
+	return nil, statusOutput{Server: &snap}, nil
+}
+
+func (s *Server) mutate(ctx context.Context, operation string, input mutationInput) (*mcp.CallToolResult, mutationOutput, error) {
+	if !s.accepting.Load() {
+		return mutationFailure(errors.New("manager_shutting_down"))
 	}
-	res := rpcResponse{JSONRPC: "2.0", ID: req.ID}
-	switch req.Method {
-	case "server/discover":
-		// MCP 2026-07-28 replaced the initialize/session handshake with
-		// per-request metadata and server/discover. ChatGPT may probe this method
-		// while creating a developer plugin, so answer it directly while keeping
-		// the legacy initialize path below for older clients and tunnel-client
-		// startup probes.
-		res.Result = discoverResult()
-	case "initialize":
-		res.Result = map[string]any{
-			"protocolVersion": legacyProtocolVersion,
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "gpt-tunnel-manager", "version": buildinfo.Version},
-		}
-	case "tools/list":
-		res.Result = map[string]any{
-			"resultType": "complete",
-			"tools":      tools(),
-			"ttlMs":      discoveryTTLMillis,
-			"cacheScope": "public",
-		}
-	case "tools/call":
-		var p struct {
-			Name      string          `json:"name"`
-			Arguments json.RawMessage `json:"arguments"`
-		}
-		if err := decodeStrict(req.Params, &p); err != nil {
-			res.Error = &rpcError{Code: -32602, Message: "invalid params"}
-			break
-		}
-		out, err := s.call(r.Context(), p.Name, p.Arguments)
-		if err != nil {
-			res.Result = toolResult(map[string]any{"ok": false, "error": stableError(err)}, true)
-		} else {
-			res.Result = toolResult(out, false)
-		}
+	if s.registry == nil {
+		return mutationFailure(errors.New("manager_registry_unavailable"))
+	}
+	if input.ServerID == "" {
+		return mutationFailure(errors.New("server_id_required"))
+	}
+
+	var (
+		snap servers.Snapshot
+		err  error
+	)
+	switch operation {
+	case "start":
+		snap, err = s.registry.Start(ctx, input.ServerID, servers.SourceMCP)
+	case "restart":
+		snap, err = s.registry.Restart(ctx, input.ServerID, servers.SourceMCP)
+	case "shutdown":
+		snap, err = s.registry.Shutdown(ctx, input.ServerID, servers.SourceMCP)
 	default:
-		res.Error = &rpcError{Code: -32601, Message: "method not found"}
+		err = errors.New("unknown_tool")
 	}
-	s.write(w, res)
+	if err != nil {
+		return mutationFailure(err)
+	}
+	return nil, mutationOutput{Server: &snap}, nil
 }
 
-func discoverResult() map[string]any {
-	return map[string]any{
-		"resultType":        "complete",
-		"supportedVersions": []string{modernProtocolVersion},
-		"capabilities":      map[string]any{"tools": map[string]any{}},
-		"_meta": map[string]any{
-			"io.modelcontextprotocol/serverInfo": map[string]any{
-				"name":    "gpt-tunnel-manager",
-				"version": buildinfo.Version,
-			},
-		},
-		"instructions": "Manage GPT Tunnel Manager server lifecycle state.",
-		"ttlMs":        discoveryTTLMillis,
-		"cacheScope":   "public",
-	}
+func statusFailure(err error) (*mcp.CallToolResult, statusOutput, error) {
+	return &mcp.CallToolResult{IsError: true}, statusOutput{Error: stableError(err)}, nil
 }
 
-func decodeStrict(raw []byte, v any) error {
-	if len(raw) == 0 {
-		raw = []byte("{}")
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		return err
-	}
-	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return errors.New("unexpected trailing JSON value")
-		}
-		return err
-	}
-	return nil
+func mutationFailure(err error) (*mcp.CallToolResult, mutationOutput, error) {
+	return &mcp.CallToolResult{IsError: true}, mutationOutput{Error: stableError(err)}, nil
 }
 
-func (s *Server) write(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func tools() []map[string]any {
-	return []map[string]any{
-		{
-			"name":        "get_status",
-			"description": "Get GPT Tunnel Manager server lifecycle status. Optionally wait for one configured server to become ready.",
-			"inputSchema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"server_id":       map[string]any{"type": "string"},
-					"wait_for_ready":  map[string]any{"type": "boolean"},
-					"timeout_seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 60},
-				},
-				"additionalProperties": false,
-			},
-		},
-		{"name": "start", "description": "Start one enabled Managed server entry by immutable server ID.", "inputSchema": mutationSchema()},
-		{"name": "restart", "description": "Restart one enabled Managed server entry by immutable server ID.", "inputSchema": mutationSchema()},
-		{"name": "shutdown", "description": "Stop one enabled Managed server entry by immutable server ID.", "inputSchema": mutationSchema()},
-	}
-}
-
-func mutationSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"properties":           map[string]any{"server_id": map[string]any{"type": "string"}},
-		"required":             []string{"server_id"},
-		"additionalProperties": false,
-	}
-}
-
-func toolResult(v any, isErr bool) map[string]any {
-	b, _ := json.Marshal(v)
-	return map[string]any{
-		"resultType":        "complete",
-		"content":           []map[string]any{{"type": "text", "text": string(b)}},
-		"structuredContent": v,
-		"isError":           isErr,
-	}
-}
-
-func (s *Server) call(ctx context.Context, name string, args json.RawMessage) (any, error) {
-	if !s.accepting.Load() && name != "get_status" {
-		return nil, errors.New("manager_shutting_down")
-	}
-	switch name {
-	case "get_status":
-		var a struct {
-			ServerID string `json:"server_id"`
-			Wait     bool   `json:"wait_for_ready"`
-			Timeout  int    `json:"timeout_seconds"`
-		}
-		if err := decodeStrict(args, &a); err != nil {
-			return nil, err
-		}
-		if a.ServerID == "" {
-			if a.Wait {
-				return nil, errors.New("server_id_required_for_wait")
-			}
-			return map[string]any{"servers": s.registry.List()}, nil
-		}
-		sup, err := s.registry.Get(a.ServerID)
-		if err != nil {
-			return nil, err
-		}
-		snap := sup.Snapshot()
-		if a.Wait && !snap.Ready {
-			n := a.Timeout
-			if n <= 0 {
-				n = 30
-			}
-			if n > 60 {
-				n = 60
-			}
-			waitCtx, cancel := context.WithTimeout(ctx, time.Duration(n)*time.Second)
-			defer cancel()
-			snap, _ = sup.Wait(waitCtx, func(x servers.Snapshot) bool {
-				return x.Ready || x.Observed == lifecycle.Degraded || x.Observed == lifecycle.Stopped
-			})
-		}
-		return map[string]any{"server": snap}, nil
-	case "start", "restart", "shutdown":
-		var a struct {
-			ServerID string `json:"server_id"`
-		}
-		if err := decodeStrict(args, &a); err != nil || a.ServerID == "" {
-			return nil, errors.New("server_id_required")
-		}
-		var (
-			snap servers.Snapshot
-			err  error
-		)
-		switch name {
-		case "start":
-			snap, err = s.registry.Start(ctx, a.ServerID, servers.SourceMCP)
-		case "restart":
-			snap, err = s.registry.Restart(ctx, a.ServerID, servers.SourceMCP)
-		case "shutdown":
-			snap, err = s.registry.Shutdown(ctx, a.ServerID, servers.SourceMCP)
-		}
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"server": snap}, nil
-	default:
-		return nil, errors.New("unknown_tool")
-	}
-}
-
-func stableError(err error) map[string]any {
+func stableError(err error) *toolError {
 	code := "operation_failed"
+	retryable := true
 	switch {
 	case errors.Is(err, servers.ErrNotFound):
 		code = "server_not_found"
+		retryable = false
 	case errors.Is(err, servers.ErrDisabled):
 		code = "server_disabled"
+		retryable = false
 	case errors.Is(err, servers.ErrModeConflict):
 		code = "mode_not_mcp_controllable"
+		retryable = false
 	case err.Error() == "manager_shutting_down":
 		code = "manager_shutting_down"
+	case err.Error() == "server_id_required", err.Error() == "server_id_required_for_wait", err.Error() == "timeout_seconds_out_of_range":
+		code = "invalid_request"
+		retryable = false
+	case err.Error() == "manager_registry_unavailable":
+		code = "manager_unavailable"
 	}
-	return map[string]any{"code": code, "message": err.Error(), "retryable": code == "operation_failed"}
+	return &toolError{Code: code, Message: err.Error(), Retryable: retryable}
 }
