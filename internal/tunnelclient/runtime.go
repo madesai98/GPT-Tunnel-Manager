@@ -133,11 +133,12 @@ func Start(ctx context.Context, s RunSpec) (*Runtime, error) {
 	r.p = p
 	readyCtx, cancel := context.WithTimeout(ctx, s.StartupTimeout)
 	defer cancel()
-	health, err := waitReady(readyCtx, urlFile)
+	health, err := waitReady(readyCtx, urlFile, p)
 	if err != nil {
 		stopCtx, c := context.WithTimeout(context.Background(), s.ShutdownTimeout)
 		_ = p.Stop(stopCtx, s.ShutdownTimeout)
 		c()
+		_ = os.Remove(urlFile)
 		return nil, err
 	}
 	r.healthURL = health
@@ -153,7 +154,7 @@ func Start(ctx context.Context, s RunSpec) (*Runtime, error) {
 	return r, nil
 }
 
-func waitReady(ctx context.Context, urlFile string) (string, error) {
+func waitReady(ctx context.Context, urlFile string, p managedProcess) (string, error) {
 	client := &http.Client{Timeout: 2 * time.Second}
 	tick := time.NewTicker(150 * time.Millisecond)
 	defer tick.Stop()
@@ -162,6 +163,11 @@ func waitReady(ctx context.Context, urlFile string) (string, error) {
 		select {
 		case <-ctx.Done():
 			return "", fmt.Errorf("tunnel-client readiness timeout: %w", ctx.Err())
+		case <-p.Done():
+			if err := p.Err(); err != nil {
+				return "", fmt.Errorf("tunnel-client exited during startup: %w", err)
+			}
+			return "", errors.New("tunnel-client exited during startup")
 		case <-tick.C:
 			if health == "" {
 				if b, err := os.ReadFile(urlFile); err == nil {
