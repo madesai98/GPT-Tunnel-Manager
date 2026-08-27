@@ -44,6 +44,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
       - name: Build native desktop app
         run: go build ./cmd/tunnel-manager
+      - name: Test Windows no-console child process configuration
+        if: runner.os == 'Windows'
+        run: go test ./internal/process
       - name: Test Windows DPAPI secret store
         if: runner.os == 'Windows'
         run: go test ./internal/secrets
