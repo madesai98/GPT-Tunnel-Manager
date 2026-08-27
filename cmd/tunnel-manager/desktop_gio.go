@@ -66,6 +66,7 @@ type desktopUI struct {
 	busy         bool
 	message      string
 	windowHidden bool
+	hidePending  bool
 	exiting      bool
 
 	showReq  chan struct{}
@@ -255,6 +256,7 @@ func (u *desktopUI) runWindow() error {
 			gtx := gioapp.NewContext(&ops, event)
 			u.layout(gtx)
 			event.Frame(gtx.Ops)
+			u.applyPendingHide(win)
 		}
 	}
 }
@@ -283,11 +285,16 @@ func (u *desktopUI) signalShow() {
 }
 
 func (u *desktopUI) showWindow() {
-	u.mu.RLock()
+	u.mu.Lock()
 	exiting := u.exiting
 	hidden := u.windowHidden
 	win := u.win
-	u.mu.RUnlock()
+	if hidden && u.hidePending && win != nil && !exiting {
+		u.hidePending = false
+		u.windowHidden = false
+		hidden = false
+	}
+	u.mu.Unlock()
 	if exiting {
 		return
 	}
@@ -320,8 +327,34 @@ func (u *desktopUI) hideToTray() {
 	}
 	win := u.win
 	u.windowHidden = true
+	u.hidePending = true
 	u.mu.Unlock()
+	win.Invalidate()
+}
+
+func (u *desktopUI) applyPendingHide(win *gioapp.Window) {
+	u.mu.Lock()
+	if !u.hidePending {
+		u.mu.Unlock()
+		return
+	}
+	u.hidePending = false
+	hidden := u.windowHidden
+	exiting := u.exiting
+	u.mu.Unlock()
+
+	if !hidden || exiting {
+		return
+	}
 	if hideDesktopWindow() {
+		return
+	}
+	if keepDesktopWindowAliveForTray() {
+		u.mu.Lock()
+		u.windowHidden = false
+		u.message = "Unable to hide GPT Tunnel Manager to the system tray."
+		u.mu.Unlock()
+		win.Invalidate()
 		return
 	}
 	win.Perform(system.ActionClose)
