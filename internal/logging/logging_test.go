@@ -82,6 +82,71 @@ func TestTunnelClientJSONLevelControlsCapture(t *testing.T) {
 	}
 }
 
+func TestTunnelClientInfoIsReclassifiedByOperatorRelevance(t *testing.T) {
+	l, err := New(t.TempDir(), "trace", 5, false, "debug", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	l.Log(Info, "Manager", "Tunnel Client", `{"level":"INFO","msg":"provided","type":"*config.Config","stacktrace":{"0":"fx.New"},"moduletrace":{"0":"app.New"}}`, nil)
+	l.Log(Info, "Manager", "Tunnel Client", `{"level":"INFO","msg":"control-plane route resolved","component":"controlplane"}`, nil)
+	l.Log(Info, "Manager", "Tunnel Client", `{"level":"INFO","msg":"🟢 tunnel-client started"}`, nil)
+
+	events := l.Ring().Snapshot()
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(events))
+	}
+	if events[0].Level != Trace {
+		t.Fatalf("Fx graph record should be trace, got %q", events[0].Level)
+	}
+	if events[1].Level != Debug {
+		t.Fatalf("runtime plumbing should be debug, got %q", events[1].Level)
+	}
+	if events[2].Level != Info {
+		t.Fatalf("runtime readiness should remain info, got %q", events[2].Level)
+	}
+}
+
+func TestSemanticTunnelClientLevelsRespectCapture(t *testing.T) {
+	l, err := New(t.TempDir(), "info", 5, false, "debug", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	l.Log(Info, "Manager", "Tunnel Client", `{"level":"INFO","msg":"run","stacktrace":{"0":"fx"},"moduletrace":{"0":"fx"}}`, nil)
+	l.Log(Info, "Manager", "Tunnel Client", `{"level":"INFO","msg":"poller started","component":"controlplane"}`, nil)
+	l.Log(Info, "Manager", "Tunnel Client", `{"level":"INFO","msg":"🟢 tunnel-client started"}`, nil)
+
+	events := l.Ring().Snapshot()
+	if len(events) != 1 || events[0].Level != Info {
+		t.Fatalf("info capture should retain only high-level info: %#v", events)
+	}
+}
+
+func TestLifecycleLevelsAreOperatorFacing(t *testing.T) {
+	l, err := New(t.TempDir(), "trace", 5, false, "debug", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	l.Log(Info, "Manager", "Lifecycle", "managed_activity_observed", nil)
+	l.Log(Info, "Manager", "Lifecycle", "server_starting", nil)
+	l.Log(Info, "Manager", "Lifecycle", "tunnel_ready", nil)
+	l.Log(Info, "Manager", "Lifecycle", "tunnel_disconnected", nil)
+	l.Log(Info, "Manager", "Lifecycle", "server_crashed", nil)
+
+	events := l.Ring().Snapshot()
+	want := []Level{Trace, Debug, Info, Warn, Error}
+	if len(events) != len(want) {
+		t.Fatalf("expected %d events, got %d", len(want), len(events))
+	}
+	for i, level := range want {
+		if events[i].Level != level {
+			t.Fatalf("event %d: expected %q, got %q", i, level, events[i].Level)
+		}
+	}
+}
+
 func TestStructuredFieldsAreRecursivelyRedacted(t *testing.T) {
 	l, err := New(t.TempDir(), "trace", 5, false, "debug", 1, 1)
 	if err != nil {
