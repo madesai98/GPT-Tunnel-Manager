@@ -115,31 +115,51 @@ func (s *Supervisor) markStartupQuarantined() Snapshot {
 	return out
 }
 
-func (r *Registry) startSupervisor(ctx context.Context, s *Supervisor, src Source) (Snapshot, error) {
+func (r *Registry) rejectQuarantinedAutomaticStart(s *Supervisor, src Source) (Snapshot, error) {
 	entry := s.Entry()
-	if src == SourceApp && r.hasStartupGuard(entry.ID) {
-		out := s.markStartupQuarantined()
-		if r.bus != nil {
-			r.bus.Publish(events.Event{
-				Kind:     events.ServerCrashed,
-				ServerID: entry.ID,
-				Fields: map[string]any{
-					"error": "automatic start quarantined after previous Manager exit during startup",
-					"code":  "startup_crash_quarantined",
-				},
-			})
-		}
-		return out, fmt.Errorf("%w: %s", ErrStartupCrashQuarantined, entry.ID)
+	if src != SourceApp || !r.hasStartupGuard(entry.ID) {
+		return Snapshot{}, nil
 	}
+	out := s.markStartupQuarantined()
+	if r.bus != nil {
+		r.bus.Publish(events.Event{
+			Kind:     events.ServerCrashed,
+			ServerID: entry.ID,
+			Fields: map[string]any{
+				"error": "automatic start quarantined after previous Manager exit during startup",
+				"code":  "startup_crash_quarantined",
+			},
+		})
+	}
+	return out, fmt.Errorf("%w: %s", ErrStartupCrashQuarantined, entry.ID)
+}
 
-	// A guard exists only while startup is in progress. Normal startup errors
+func (r *Registry) startupGuarded(s *Supervisor, src Source, operation func() (Snapshot, error)) (Snapshot, error) {
+	if out, err := r.rejectQuarantinedAutomaticStart(s, src); err != nil {
+		return out, err
+	}
+	entry := s.Entry()
+
+	// A guard exists only while startup/restart is in progress. Normal errors
 	// clear it because the Manager survived them. If the entire process dies,
 	// the file remains and the next launch skips only the offending Always On
 	// entry, keeping the Manager UI recoverable without editing servers.json.
 	if err := r.writeStartupGuard(entry.ID); err != nil {
 		return s.Snapshot(), fmt.Errorf("write startup crash guard: %w", err)
 	}
-	out, err := s.Start(ctx, src)
+	out, err := operation()
 	r.clearStartupGuard(entry.ID)
 	return out, err
+}
+
+func (r *Registry) startSupervisor(ctx context.Context, s *Supervisor, src Source) (Snapshot, error) {
+	return r.startupGuarded(s, src, func() (Snapshot, error) {
+		return s.Start(ctx, src)
+	})
+}
+
+func (r *Registry) restartSupervisor(ctx context.Context, s *Supervisor, src Source) (Snapshot, error) {
+	return r.startupGuarded(s, src, func() (Snapshot, error) {
+		return s.Restart(ctx, src)
+	})
 }
