@@ -1,0 +1,62 @@
+name: Release Rescue v1.0.5
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/release-rescue-v105.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Publish existing v1.0.5 artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=v1.0.5
+          TARGET_SHA=76098eeb3b597a308ffaaae08bf86af0ba7023f9
+          SOURCE_RUN=33029399905
+
+          rm -rf downloaded dist
+          mkdir -p downloaded dist
+          gh run download "$SOURCE_RUN" --dir downloaded
+          find downloaded -type f -maxdepth 3 -print -exec cp {} dist/ \;
+
+          PREFIX="GPT-Tunnel-Manager-${VERSION}/"
+          git archive --format=tar.gz --prefix="$PREFIX" -o "dist/GPT-Tunnel-Manager-${VERSION}-source.tar.gz" "$TARGET_SHA"
+          git archive --format=zip --prefix="$PREFIX" -o "dist/GPT-Tunnel-Manager-${VERSION}-source.zip" "$TARGET_SHA"
+
+          cat > "dist/CHANGELOG-${VERSION}.md" <<'EOF'
+          # GPT Tunnel Manager v1.0.5
+
+          ## Fix
+
+          - Correct Windows minimize/close-to-tray behavior so the Gio frame finishes before the native window is hidden.
+          - Resolve the tray window by the current process and retain the exact HWND for reliable restoration from the tray icon or Open Manager action.
+          - Keep the live Gio window alive while hidden instead of destroying the application's last window.
+          EOF
+
+          (
+            cd dist
+            sha256sum *.tar.gz *.zip > SHA256SUMS.txt
+          )
+
+          if ! gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release create "$VERSION" \
+              --target "$TARGET_SHA" \
+              --title "GPT Tunnel Manager $VERSION" \
+              --notes-file "dist/CHANGELOG-${VERSION}.md"
+          fi
+
+          gh release upload "$VERSION" dist/* --clobber
