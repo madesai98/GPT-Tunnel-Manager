@@ -1,0 +1,145 @@
+name: Apply tray thread fix
+
+on:
+  push:
+    paths:
+      - .github/workflows/apply-tray-thread-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch tray threading and hidden restore
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('cmd/tunnel-manager/desktop_gio.go')
+          text = path.read_text()
+
+          old_import = '"os"\n\t"sync"'
+          new_import = '"os"\n\t"runtime"\n\t"sync"'
+          assert old_import in text, 'import anchor not found'
+          text = text.replace(old_import, new_import, 1)
+
+          old_run = '''\tstartTray, stopTray := systray.RunWithExternalLoop(u.trayReady, func() {})
+\tstartTray()
+\tgo func() {
+\t\terr := <-done
+\t\tclose(u.trayStop)
+\t\tstopTray()
+\t\tif err != nil {
+\t\t\tfmt.Fprintln(os.Stderr, "desktop:", err)
+\t\t\tos.Exit(1)
+\t\t}
+\t\tos.Exit(0)
+\t}()
+
+\tgioapp.Main()
+'''
+          new_run = '''\t// On Windows, the systray HWND and its GetMessage loop must live on the
+\t// same OS thread. RunWithExternalLoop creates the HWND during Register but
+\t// starts GetMessage from another goroutine, which leaves tray click/menu
+\t// messages on the original thread. Give systray its own locked OS thread
+\t// and let its normal Run loop create and service the HWND there.
+\tgo func() {
+\t\truntime.LockOSThread()
+\t\tdefer runtime.UnlockOSThread()
+\t\tsystray.Run(u.trayReady, func() {})
+\t}()
+
+\tgo func() {
+\t\terr := <-done
+\t\tclose(u.trayStop)
+\t\tsystray.Quit()
+\t\tif err != nil {
+\t\t\tfmt.Fprintln(os.Stderr, "desktop:", err)
+\t\t\tos.Exit(1)
+\t\t}
+\t\tos.Exit(0)
+\t}()
+
+\tgioapp.Main()
+'''
+          assert old_run in text, 'runDesktop anchor not found'
+          text = text.replace(old_run, new_run, 1)
+
+          old_handle = '''func (u *desktopUI) handleShowRequest(win *gioapp.Window) {
+\tu.mu.RLock()
+\thidden := u.windowHidden
+\tu.mu.RUnlock()
+\tif hidden {
+\t\treturn
+\t}
+\tselect {
+\tcase <-u.showReq:
+\t\twin.Option(gioapp.Windowed.Option())
+\t\twin.Perform(system.ActionRaise)
+\t\twin.Invalidate()
+\tdefault:
+\t}
+}
+'''
+          new_handle = '''func (u *desktopUI) handleShowRequest(win *gioapp.Window) {
+\tselect {
+\tcase <-u.showReq:
+\tdefault:
+\t\treturn
+\t}
+
+\tu.mu.RLock()
+\thidden := u.windowHidden
+\texiting := u.exiting
+\tu.mu.RUnlock()
+\tif exiting {
+\t\treturn
+\t}
+
+\tif hidden {
+\t\tif !keepDesktopWindowAliveForTray() {
+\t\t\t// Non-Windows tray hiding closes the native window. Leave the show
+\t\t\t// request queued so the outer loop can recreate it after DestroyEvent.
+\t\t\tu.signalShow()
+\t\t\treturn
+\t\t}
+\t\tif !restoreDesktopWindow() {
+\t\t\tu.mu.Lock()
+\t\t\tu.message = "Unable to restore GPT Tunnel Manager from the system tray."
+\t\t\tu.mu.Unlock()
+\t\t\twin.Invalidate()
+\t\t\treturn
+\t\t}
+\t\tu.mu.Lock()
+\t\tu.windowHidden = false
+\t\tu.hidePending = false
+\t\tu.mu.Unlock()
+\t}
+
+\twin.Option(gioapp.Windowed.Option())
+\twin.Perform(system.ActionRaise)
+\twin.Invalidate()
+}
+'''
+          assert old_handle in text, 'handleShowRequest anchor not found'
+          text = text.replace(old_handle, new_handle, 1)
+
+          path.write_text(text)
+          PY
+      - name: Format and verify
+        shell: bash
+        run: |
+          gofmt -w cmd/tunnel-manager/desktop_gio.go
+          git diff --check
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cmd/tunnel-manager/desktop_gio.go
+          git commit -m "Fix Windows tray message loop"
+          git push
