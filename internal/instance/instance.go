@@ -75,7 +75,7 @@ func Acquire(root string) (*Owner, error) {
 	lockPath := filepath.Join(dataDir, "instance.lock.json")
 	rootHash := hashRoot(root)
 
-	for attempt := 0; attempt < 4; attempt++ {
+	for attempt := 0; attempt < 8; attempt++ {
 		file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
 			return becomeOwner(file, lockPath, rootHash)
@@ -94,14 +94,36 @@ func Acquire(root string) (*Owner, error) {
 			}
 		}
 
+		// A newly-created O_EXCL file may briefly exist before its owner has
+		// finished writing the identity record and started serving HTTP. Never
+		// delete a young lock: doing so could permit two owners for one root.
+		if lockIsYoung(lockPath, 2*time.Second) {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+
 		// Only remove the exact stale lock we inspected. If another process
 		// replaced it in the meantime, leave the newer owner's record intact.
 		current, currentErr := os.ReadFile(lockPath)
-		if currentErr == nil && bytes.Equal(current, existing) {
+		if readErr == nil && currentErr == nil && bytes.Equal(current, existing) {
 			_ = os.Remove(lockPath)
+			continue
 		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if _, err := os.Stat(lockPath); err == nil {
+		return nil, ErrAlreadyRunning
 	}
 	return nil, errors.New("could not acquire the Portable Root instance lock")
+}
+
+func lockIsYoung(path string, age time.Duration) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return time.Since(info.ModTime()) < age
 }
 
 func becomeOwner(file *os.File, lockPath, rootHash string) (*Owner, error) {
