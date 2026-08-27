@@ -4,9 +4,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"gioui.org/layout"
@@ -14,6 +14,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/buildinfo"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/selfupdate"
 )
 
@@ -22,13 +23,16 @@ var managerSelfUpdate widget.Clickable
 func (u *desktopUI) handleManagerSelfUpdate(gtx layout.Context) {
 	for managerSelfUpdate.Clicked(gtx) {
 		u.async("checking GPT Tunnel Manager update", func() error {
+			if !buildinfo.IsRelease() {
+				return errors.New("self-update is available only in published release builds")
+			}
 			executable, err := os.Executable()
 			if err != nil {
 				return fmt.Errorf("resolve GPT Tunnel Manager executable: %w", err)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 			defer cancel()
-			plan, err := selfupdate.CheckAndStage(ctx, version, executable)
+			plan, err := selfupdate.CheckAndStage(ctx, buildinfo.Version, executable)
 			if err != nil {
 				return err
 			}
@@ -61,17 +65,16 @@ func (u *desktopUI) handleManagerSelfUpdate(gtx layout.Context) {
 }
 
 func (u *desktopUI) managerSelfUpdateSection(gtx layout.Context) layout.Dimensions {
-	current := strings.TrimSpace(version)
-	if !strings.HasPrefix(current, "v") {
-		current = "v" + current
+	current := buildinfo.DisplayVersion()
+	caption := "Checks the latest published GitHub release, stages it in a temporary directory, preserves config/data/tools, then restarts the manager through an independent updater terminal."
+	if !buildinfo.IsRelease() {
+		caption = "Development build: self-update is disabled because this binary is not a published release."
 	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(material.H6(u.th, "GPT Tunnel Manager").Layout),
 		layout.Rigid(material.Caption(u.th, "Current version: "+current).Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Bottom: unit.Dp(6)}.Layout(gtx,
-				material.Caption(u.th, "Checks the latest published GitHub release, stages it in a temporary directory, preserves config/data/tools, then restarts the manager through an independent updater terminal.").Layout,
-			)
+			return layout.Inset{Bottom: unit.Dp(6)}.Layout(gtx, material.Caption(u.th, caption).Layout)
 		}),
 		layout.Rigid(material.Button(u.th, &managerSelfUpdate, "Update GPT Tunnel Manager").Layout),
 	)
