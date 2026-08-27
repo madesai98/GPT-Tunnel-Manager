@@ -21,7 +21,7 @@ import (
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/secrets"
 )
 
-const version = "1.0.1"
+var version = "1.0.2"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
