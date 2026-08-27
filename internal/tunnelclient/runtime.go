@@ -75,6 +75,12 @@ func JoinCommand(argv []string) string {
 	return strings.Join(parts, " ")
 }
 
+const controlPlaneReadinessGrace = 10 * time.Second
+
+func readinessTimeout(startup time.Duration) time.Duration {
+	return startup + controlPlaneReadinessGrace
+}
+
 func Start(ctx context.Context, s RunSpec) (*Runtime, error) {
 	if s.Binary == "" || s.TunnelID == "" || s.APIKey == "" {
 		return nil, errors.New("tunnel-client binary, tunnel id, and runtime API key are required")
@@ -133,7 +139,13 @@ func Start(ctx context.Context, s RunSpec) (*Runtime, error) {
 		return nil, err
 	}
 	r.p = p
-	readyCtx, cancel := context.WithTimeout(ctx, s.StartupTimeout)
+	// tunnel-client's default control-plane poll is a 30-second long poll. The
+	// configured startup timeout is also 30 seconds by default, so using that
+	// exact deadline for the stronger control-plane readiness check creates a
+	// deterministic race: the first successful poll normally completes a few
+	// hundred milliseconds after the Manager gives up. Preserve the configured
+	// local startup budget and add a small grace window for that first long poll.
+	readyCtx, cancel := context.WithTimeout(ctx, readinessTimeout(s.StartupTimeout))
 	defer cancel()
 	// Local /readyz only proves the daemon and MCP target are ready. A ChatGPT
 	// tunnel is not actually usable until tunnel-client has completed at least

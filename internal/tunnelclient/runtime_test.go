@@ -53,6 +53,14 @@ func TestRuntimeStopHonorsConfiguredShutdownTimeout(t *testing.T) {
 	}
 }
 
+func TestReadinessTimeoutIncludesFirstLongPollGrace(t *testing.T) {
+	got := readinessTimeout(30 * time.Second)
+	want := 40 * time.Second
+	if got != want {
+		t.Fatalf("readiness timeout=%s, want %s", got, want)
+	}
+}
+
 func TestWaitReadyReturnsWhenTunnelClientExits(t *testing.T) {
 	process := &timeoutProcess{done: make(chan struct{}), err: errors.New("stdio MCP command exited")}
 	close(process.done)
