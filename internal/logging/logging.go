@@ -149,7 +149,12 @@ type Logger struct {
 }
 
 func New(root, capture string, memoryMB int, writeDisk bool, diskMin string, maxFileMB, keep int) (*Logger, error) {
-	l := &Logger{root: root, redactor: NewRedactor(), ring: NewRing(memoryMB), capture: parseLevel(capture)}
+	l := &Logger{
+		root:     root,
+		redactor: NewRedactor(),
+		ring:     NewRing(memoryMB),
+		capture:  effectiveCaptureLevel(capture, memoryMB, diskMin, maxFileMB, keep),
+	}
 	if writeDisk {
 		d, err := newDiskSink(filepath.Join(root, "logs", "manager"), parseLevel(diskMin), maxFileMB, keep)
 		if err != nil {
@@ -182,6 +187,18 @@ func knownLevel(s string) (Level, bool) {
 	default:
 		return Info, false
 	}
+}
+
+func effectiveCaptureLevel(capture string, memoryMB int, diskMin string, maxFileMB, keep int) Level {
+	level := parseLevel(capture)
+	// v1.0.14 and earlier shipped this exact logging shape as the default.
+	// Treat it as the legacy default rather than an intentional INFO-only
+	// capture choice, so existing installs gain the new diagnostic severity
+	// model without losing DEBUG/TRACE before the UI can filter them.
+	if level == Info && memoryMB == 25 && parseLevel(diskMin) == Debug && maxFileMB == 10 && keep == 5 {
+		return Trace
+	}
+	return level
 }
 
 func (l *Logger) Redactor() *Redactor { return l.redactor }
@@ -378,7 +395,7 @@ func (l *Logger) Reconfigure(c config.LoggingConfig) error {
 	l.mu.Lock()
 	old := l.disk
 	l.disk = next
-	l.capture = parseLevel(c.CaptureLevel)
+	l.capture = effectiveCaptureLevel(c.CaptureLevel, c.MemoryLimitMB, c.DiskMinimumLevel, c.MaximumFileSizeMB, c.KeepFiles)
 	l.ring.SetMaxMB(c.MemoryLimitMB)
 	l.mu.Unlock()
 	if old != nil {
