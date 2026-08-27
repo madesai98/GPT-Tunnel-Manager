@@ -1,0 +1,24 @@
+name: Publish v1.0.5 Draft
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-v105-draft.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish existing draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --method PATCH \
+            repos/${GITHUB_REPOSITORY}/releases/377509535 \
+            -F draft=false
