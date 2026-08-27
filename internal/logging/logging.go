@@ -192,6 +192,9 @@ func (l *Logger) Log(level Level, source, component, msg string, fields map[stri
 	if component == "Tunnel Client" {
 		timestamp, level, component, msg, fields = normalizeTunnelClientEvent(timestamp, level, component, msg, fields)
 	}
+	if component == "Lifecycle" {
+		level = semanticLifecycleLevel(level, msg)
+	}
 
 	l.mu.RLock()
 	capture := l.capture
@@ -266,7 +269,68 @@ func normalizeTunnelClientEvent(timestamp time.Time, level Level, component, msg
 		merged = nil
 	}
 
+	level = semanticTunnelClientLevel(level, component, structuredMessage, merged)
 	return timestamp, level, component, structuredMessage, merged
+}
+
+func semanticTunnelClientLevel(level Level, component, msg string, fields map[string]any) Level {
+	// Preserve explicit diagnostic severities from the tunnel-client. Only its
+	// INFO stream is reclassified because Fx and runtime plumbing emit a large
+	// amount of implementation detail at INFO even though it is not operator
+	// information in GPT Tunnel Manager.
+	if level != Info {
+		return level
+	}
+
+	message := strings.ToLower(strings.TrimSpace(msg))
+	if isTunnelClientTrace(message, fields) {
+		return Trace
+	}
+
+	// Keep only true high-level readiness as INFO. Other tunnel-client INFO
+	// records remain available as DEBUG when the user asks for diagnostics.
+	if strings.Contains(message, "tunnel-client started") {
+		return Info
+	}
+
+	return Debug
+}
+
+func isTunnelClientTrace(message string, fields map[string]any) bool {
+	switch message {
+	case "provided", "supplied", "run", "invoking",
+		"onstart hook executing", "onstart hook executed",
+		"onstop hook executing", "onstop hook executed",
+		"initialized custom fxevent.logger":
+		return true
+	}
+
+	// Fx graph construction records carry stack/module traces and constructor
+	// metadata. They are useful only for deep startup diagnostics.
+	_, stack := fields["stacktrace"]
+	_, moduleTrace := fields["moduletrace"]
+	_, constructor := fields["constructor"]
+	return stack && (moduleTrace || constructor)
+}
+
+func semanticLifecycleLevel(level Level, msg string) Level {
+	if level != Info {
+		return level
+	}
+	switch strings.ToLower(strings.TrimSpace(msg)) {
+	case "managed_activity_observed":
+		return Trace
+	case "server_starting", "server_stopping", "tunnel_starting":
+		return Debug
+	case "server_retry_scheduled", "tunnel_disconnected":
+		return Warn
+	case "server_crashed":
+		return Error
+	case "server_ready", "server_stopped", "tunnel_ready", "tunnel_client_update_available", "tunnel_client_updated":
+		return Info
+	default:
+		return level
+	}
 }
 
 func redactFields(r *Redactor, m map[string]any) map[string]any {
