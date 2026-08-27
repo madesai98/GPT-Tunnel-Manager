@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/buildinfo"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/lifecycle"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/servers"
 )
@@ -117,7 +118,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		res.Result = map[string]any{
 			"protocolVersion": "2025-06-18",
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "gpt-tunnel-manager", "version": "1.0.0"},
+			"serverInfo":      map[string]any{"name": "gpt-tunnel-manager", "version": buildinfo.Version},
 		}
 	case "tools/list":
 		res.Result = map[string]any{"tools": tools()}
@@ -184,7 +185,7 @@ func tools() []map[string]any {
 		},
 		{"name": "start", "description": "Start one enabled Managed server entry by immutable server ID.", "inputSchema": mutationSchema()},
 		{"name": "restart", "description": "Restart one enabled Managed server entry by immutable server ID.", "inputSchema": mutationSchema()},
-		{"name": "shutdown", "description": "Stop one Managed server entry by immutable server ID.", "inputSchema": mutationSchema()},
+		{"name": "shutdown", "description": "Stop one enabled Managed server entry by immutable server ID.", "inputSchema": mutationSchema()},
 	}
 }
 
