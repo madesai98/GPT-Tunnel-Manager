@@ -8,6 +8,11 @@ on:
       - .github/release-page.json
       - .github/release-page.md
       - .github/workflows/release-page.yml
+  workflow_run:
+    workflows:
+      - Release
+    types:
+      - completed
 
 permissions:
   contents: write
@@ -18,9 +23,12 @@ concurrency:
 
 jobs:
   update:
+    if: github.event_name == 'push' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
       - name: Update GitHub release page
         env:
           GH_TOKEN: ${{ github.token }}
@@ -39,7 +47,11 @@ jobs:
             exit 1
           fi
           if ! gh release view "$VERSION" >/dev/null 2>&1; then
-            echo "Release $VERSION does not exist yet" >&2
+            if [[ "${{ github.event_name }}" == "push" ]]; then
+              echo "Release $VERSION does not exist yet; it will be updated after the Release workflow completes."
+              exit 0
+            fi
+            echo "Release $VERSION does not exist after the Release workflow completed" >&2
             exit 1
           fi
 
