@@ -19,18 +19,19 @@ import (
 )
 
 type RunSpec struct {
-	Binary              string
-	TunnelID            string
-	APIKey              string
-	MCPURL              string
-	MCPCommand          []string
-	Dir                 string
-	Env                 map[string]string
-	HealthDir           string
-	StartupTimeout      time.Duration
-	ShutdownTimeout     time.Duration
-	TelemetryCompatible bool
-	OnLog               func(stream, line string)
+	Binary                           string
+	TunnelID                         string
+	APIKey                           string
+	MCPURL                           string
+	MCPCommand                       []string
+	StdioSendInitializedNotification bool
+	Dir                              string
+	Env                              map[string]string
+	HealthDir                        string
+	StartupTimeout                   time.Duration
+	ShutdownTimeout                  time.Duration
+	TelemetryCompatible              bool
+	OnLog                            func(stream, line string)
 }
 
 type managedProcess interface {
@@ -81,6 +82,17 @@ func readinessTimeout(startup time.Duration) time.Duration {
 	return startup + controlPlaneReadinessGrace
 }
 
+func appendMCPArgs(args []string, s RunSpec) []string {
+	if s.MCPURL != "" {
+		return append(args, "--mcp.server-url", s.MCPURL)
+	}
+	args = append(args, "--mcp.command", JoinCommand(s.MCPCommand))
+	if s.StdioSendInitializedNotification {
+		args = append(args, "--mcp.stdio-send-initialized-notification")
+	}
+	return args
+}
+
 func Start(ctx context.Context, s RunSpec) (*Runtime, error) {
 	if s.Binary == "" || s.TunnelID == "" || s.APIKey == "" {
 		return nil, errors.New("tunnel-client binary, tunnel id, and runtime API key are required")
@@ -109,11 +121,7 @@ func Start(ctx context.Context, s RunSpec) (*Runtime, error) {
 		"--log.format", "json",
 		"--log.level", "debug",
 	}
-	if s.MCPURL != "" {
-		args = append(args, "--mcp.server-url", s.MCPURL)
-	} else {
-		args = append(args, "--mcp.command", JoinCommand(s.MCPCommand))
-	}
+	args = appendMCPArgs(args, s)
 	env := []string{"CONTROL_PLANE_API_KEY=" + s.APIKey}
 	for k, v := range s.Env {
 		env = append(env, k+"="+v)
@@ -302,4 +310,8 @@ func meaningfulActivity(line string) bool {
 
 func TelemetryCompatible(version string) bool {
 	return version == "v0.0.13" || strings.HasPrefix(version, "v0.0.13+")
+}
+
+func StdioInitializedNotificationCompatible(version string) bool {
+	return TelemetryCompatible(version)
 }
