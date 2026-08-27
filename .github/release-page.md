@@ -2,7 +2,7 @@
 
 ## Copyable one-line app descriptions
 
-This release makes the per-server Developer Plugin app description directly usable from the native UI.
+This release makes the per-server Developer Plugin app description directly copyable from the native UI.
 
 - Renames the server `Marker` and editor `Lifecycle Marker` buttons to `Copy App Description`.
 - Clicking `Copy App Description` now writes the generated description directly to the system clipboard instead of only showing it in the status message.
