@@ -98,7 +98,7 @@ func (r *Registry) Restart(ctx context.Context, id string, src Source) (Snapshot
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return s.Restart(ctx, src)
+	return r.restartSupervisor(ctx, s, src)
 }
 
 func (r *Registry) Shutdown(ctx context.Context, id string, src Source) (Snapshot, error) {
