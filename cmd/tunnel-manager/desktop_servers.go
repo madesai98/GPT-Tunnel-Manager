@@ -80,8 +80,12 @@ func (u *desktopUI) serversPage(gtx layout.Context) layout.Dimensions {
 	snapshots := u.core.Snapshots()
 	manager := u.core.ManagerSnapshot()
 	byID := make(map[string]servers.Snapshot, len(snapshots))
+	ready := 0
 	for _, snapshot := range snapshots {
 		byID[snapshot.ServerID] = snapshot
+		if snapshot.Ready {
+			ready++
+		}
 	}
 
 	addActions := u.row("")
@@ -90,15 +94,20 @@ func (u *desktopUI) serversPage(gtx layout.Context) layout.Dimensions {
 	}
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+		layout.Rigid(compactCard(func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-				layout.Flexed(1, material.Body1(u.th, fmt.Sprintf("Manager MCP + %d configured Server Entries", len(entries))).Layout),
-				layout.Rigid(material.Button(u.th, &addActions.edit, "Add Server").Layout),
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+						layout.Rigid(sectionTitle(u.th, "Runtime Overview")),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, mutedCaption(u.th, fmt.Sprintf("Manager MCP + %d configured servers · %d ready", len(entries), ready)))
+						}),
+					)
+				}),
+				layout.Rigid(primaryButton(u.th, &addActions.edit, "Add Server")),
 			)
-		}),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Spacer{Height: unit.Dp(8)}.Layout(gtx)
-		}),
+		})),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			return u.list.Layout(gtx, len(entries)+1, func(gtx layout.Context, index int) layout.Dimensions {
 				if index == 0 {
@@ -130,26 +139,33 @@ func (u *desktopUI) managerRow(gtx layout.Context, snapshot coreapp.ManagerSnaps
 	if tunnelID == "" {
 		tunnelID = "not configured"
 	}
-	detail := fmt.Sprintf("system · %s · tunnel %s · ready %v", state, tunnelID, snapshot.Ready)
+	statusBg, statusFg, statusText := stateColors(state, snapshot.Ready)
+	detail := fmt.Sprintf("System runtime · %s · tunnel %s", state, tunnelID)
 	if snapshot.Error != "" {
 		detail += " · " + snapshot.Error
 	}
 
-	return layout.Inset{Bottom: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layout.Inset{Bottom: unit.Dp(10)}.Layout(gtx, compactCard(func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(material.Body1(u.th, "Manager MCP").Layout),
-			layout.Rigid(material.Caption(u.th, detail).Layout),
-			layout.Rigid(material.Caption(u.th, snapshot.MCPURL+" · built-in, cannot be deleted").Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(1, sectionTitle(u.th, "Manager MCP")),
+					layout.Rigid(pill(u.th, statusText, statusBg, statusFg)),
+				)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(5)}.Layout(gtx, mutedCaption(u.th, detail)) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(3)}.Layout(gtx, faintCaption(u.th, snapshot.MCPURL+" · built-in runtime")) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{}.Layout(gtx,
-						layout.Rigid(buttonInset(u.th, &actions.restart, "Restart Tunnel")),
-						layout.Rigid(buttonInset(u.th, &actions.edit, "Settings")),
+						layout.Rigid(secondaryButton(u.th, &actions.restart, "Restart Tunnel")),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+						layout.Rigid(secondaryButton(u.th, &actions.edit, "Settings")),
 					)
 				})
 			}),
 		)
-	})
+	})(gtx))
 }
 
 func (u *desktopUI) row(id string) *rowActions {
@@ -198,26 +214,47 @@ func (u *desktopUI) serverRow(gtx layout.Context, entry config.ServerEntry, snap
 	if state == "" {
 		state = "stopped"
 	}
-	detail := fmt.Sprintf("%s · %s · tunnel %v · activity %s", entry.Mode, state, snapshot.TunnelReady, snapshot.ActivityTracking)
+	statusBg, statusFg, statusText := stateColors(state, snapshot.Ready)
+	detail := fmt.Sprintf("%s · %s · tunnel ready %v · activity %s", entry.Mode, state, snapshot.TunnelReady, snapshot.ActivityTracking)
 
-	return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layout.Inset{Bottom: unit.Dp(10)}.Layout(gtx, compactCard(func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(material.Body1(u.th, entry.Name).Layout),
-			layout.Rigid(material.Caption(u.th, entry.ID+" · "+detail).Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+							layout.Rigid(sectionTitle(u.th, entry.Name)),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(2)}.Layout(gtx, faintCaption(u.th, entry.ID)) }),
+						)
+					}),
+					layout.Rigid(pill(u.th, statusText, statusBg, statusFg)),
+				)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, mutedCaption(u.th, detail)) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{}.Layout(gtx,
-						layout.Rigid(buttonInset(u.th, &actions.start, "Start")),
-						layout.Rigid(buttonInset(u.th, &actions.stop, "Stop")),
-						layout.Rigid(buttonInset(u.th, &actions.restart, "Restart")),
-						layout.Rigid(buttonInset(u.th, &actions.edit, "Edit")),
-						layout.Rigid(buttonInset(u.th, &actions.marker, "Copy App Description")),
-						layout.Rigid(buttonInset(u.th, &actions.delete, "Delete")),
+						layout.Rigid(primaryButton(u.th, &actions.start, "Start")),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+						layout.Rigid(secondaryButton(u.th, &actions.stop, "Stop")),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+						layout.Rigid(secondaryButton(u.th, &actions.restart, "Restart")),
+					)
+				})
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{}.Layout(gtx,
+						layout.Rigid(secondaryButton(u.th, &actions.edit, "Edit")),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+						layout.Rigid(secondaryButton(u.th, &actions.marker, "Copy App Description")),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+						layout.Rigid(dangerButton(u.th, &actions.delete, "Delete")),
 					)
 				})
 			}),
 		)
-	})
+	})(gtx))
 }
 
 func (u *desktopUI) lifecycle(id, action string) {
@@ -327,58 +364,75 @@ func (u *desktopUI) serverEditor(gtx layout.Context) layout.Dimensions {
 
 	return u.list.Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(material.H6(u.th, "Server Editor").Layout),
-			layout.Rigid(material.Caption(u.th, valueOr(form.id, "New entry — ID generated on save")).Layout),
-			layout.Rigid(material.CheckBox(u.th, &form.enabled, "Enabled").Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{}.Layout(gtx,
-					layout.Rigid(buttonInset(u.th, &form.modeBtn, "Mode: "+modeLabels[form.mode])),
-					layout.Rigid(buttonInset(u.th, &form.transportBtn, "Transport: "+transportLabels[form.transport])),
+			layout.Rigid(card(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(sectionTitle(u.th, "Identity & lifecycle")),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(3), Bottom: unit.Dp(10)}.Layout(gtx, faintCaption(u.th, valueOr(form.id, "New entry — ID generated on save"))) }),
+					layout.Rigid(material.CheckBox(u.th, &form.enabled, "Enabled").Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Top: unit.Dp(8), Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							return layout.Flex{}.Layout(gtx,
+								layout.Rigid(secondaryButton(u.th, &form.modeBtn, "Mode: "+modeLabels[form.mode])),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+								layout.Rigid(secondaryButton(u.th, &form.transportBtn, "Transport: "+transportLabels[form.transport])),
+							)
+						})
+					}),
+					layout.Rigid(editorLine(u.th, &form.name, "Name")),
+					layout.Rigid(editorLine(u.th, &form.plugin, "ChatGPT Developer Plugin name")),
+					layout.Rigid(editorLine(u.th, &form.tunnel, "Tunnel ID")),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(3)}.Layout(gtx, mutedCaption(u.th, "OpenAI Runtime API key is inherited from the Manager settings.")) }),
 				)
-			}),
-			layout.Rigid(editorLine(u.th, &form.name, "Name")),
-			layout.Rigid(editorLine(u.th, &form.plugin, "ChatGPT Developer Plugin name")),
-			layout.Rigid(editorLine(u.th, &form.tunnel, "Tunnel ID")),
-			layout.Rigid(material.Caption(u.th, "OpenAI Runtime API key: uses the Manager API key from Settings.").Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if form.transport == 2 {
-					return layout.Dimensions{}
-				}
-				return editorLine(u.th, &form.exe, "Executable")(gtx)
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if form.transport == 2 {
-					return layout.Dimensions{}
-				}
-				return editorLine(u.th, &form.cwd, "Working directory")(gtx)
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if form.transport == 2 {
-					return layout.Dimensions{}
-				}
-				return editorLine(u.th, &form.args, "Arguments, one per line")(gtx)
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if form.transport == 0 {
-					return layout.Dimensions{}
-				}
-				return editorLine(u.th, &form.url, "MCP URL")(gtx)
-			}),
-			layout.Rigid(editorLine(u.th, &form.env, "Environment KEY=value, one per line")),
-			layout.Rigid(editorLine(u.th, &form.secretEnv, "Secret environment KEY=secret://ref, one per line")),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{}.Layout(gtx,
-					layout.Flexed(1, editorLine(u.th, &form.startup, "Startup timeout seconds")),
-					layout.Flexed(1, editorLine(u.th, &form.shutdown, "Shutdown timeout seconds")),
-					layout.Flexed(1, editorLine(u.th, &form.idle, "Managed idle timeout; blank = global")),
+			})),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
+			layout.Rigid(card(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(sectionTitle(u.th, "Transport")),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(9)}.Layout(gtx) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if form.transport == 2 { return layout.Dimensions{} }
+						return editorLine(u.th, &form.exe, "Executable")(gtx)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if form.transport == 2 { return layout.Dimensions{} }
+						return editorLine(u.th, &form.cwd, "Working directory")(gtx)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if form.transport == 2 { return layout.Dimensions{} }
+						return editorLine(u.th, &form.args, "Arguments, one per line")(gtx)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if form.transport == 0 { return layout.Dimensions{} }
+						return editorLine(u.th, &form.url, "MCP URL")(gtx)
+					}),
 				)
-			}),
+			})),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
+			layout.Rigid(card(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(sectionTitle(u.th, "Environment & runtime")),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(9)}.Layout(gtx) }),
+					layout.Rigid(editorLine(u.th, &form.env, "Environment KEY=value, one per line")),
+					layout.Rigid(editorLine(u.th, &form.secretEnv, "Secret environment KEY=secret://ref, one per line")),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{}.Layout(gtx,
+							layout.Flexed(1, editorLine(u.th, &form.startup, "Startup timeout seconds")),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(9)}.Layout(gtx) }),
+							layout.Flexed(1, editorLine(u.th, &form.shutdown, "Shutdown timeout seconds")),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(9)}.Layout(gtx) }),
+							layout.Flexed(1, editorLine(u.th, &form.idle, "Managed idle timeout; blank = global")),
+						)
+					}),
+				)
+			})),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{}.Layout(gtx,
-						layout.Rigid(material.Button(u.th, &form.cancel, "Cancel").Layout),
-						layout.Rigid(buttonInset(u.th, &form.lifecycleMarker, "Copy App Description")),
-						layout.Rigid(buttonInset(u.th, &form.save, "Save")),
+				return layout.Inset{Top: unit.Dp(14), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+						layout.Rigid(secondaryButton(u.th, &form.cancel, "Cancel")),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(8)}.Layout(gtx) }),
+						layout.Rigid(secondaryButton(u.th, &form.lifecycleMarker, "Copy App Description")),
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions { return layout.Spacer{}.Layout(gtx) }),
+						layout.Rigid(primaryButton(u.th, &form.save, "Save Server")),
 					)
 				})
 			}),
@@ -388,10 +442,18 @@ func (u *desktopUI) serverEditor(gtx layout.Context) layout.Dimensions {
 
 func editorLine(theme *material.Theme, editor *widget.Editor, label string) layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(material.Caption(theme, label).Layout),
-			layout.Rigid(material.Editor(theme, editor, label).Layout),
-		)
+		return layout.Inset{Bottom: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(mutedCaption(theme, label)),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(5)}.Layout(gtx) }),
+				layout.Rigid(inputSurface(func(gtx layout.Context) layout.Dimensions {
+					style := material.Editor(theme, editor, label)
+					style.Color = uiText
+					style.HintColor = uiFaint
+					return style.Layout(gtx)
+				})),
+			)
+		})
 	}
 }
 
