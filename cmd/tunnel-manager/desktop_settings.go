@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"image/color"
 	"strconv"
 	"strings"
 
@@ -41,14 +40,12 @@ type settingsForm struct {
 	disk           widget.Bool
 
 	closeMode   int
-	themeMode   int
 	captureMode int
 	displayMode int
 	diskMinMode int
 	channelMode int
 
 	closeBtn       widget.Clickable
-	themeBtn       widget.Clickable
 	captureBtn     widget.Clickable
 	displayBtn     widget.Clickable
 	diskMinBtn     widget.Clickable
@@ -123,8 +120,6 @@ func (u *desktopUI) loadSettings() {
 	} else {
 		s.closeMode = 0
 	}
-	themes := []string{"system", "light", "dark"}
-	s.themeMode = indexValue(themes, cfg.Appearance.Theme)
 	s.captureMode = indexValue(logLevelValues, cfg.Logging.CaptureLevel)
 	s.displayMode = indexValue(displayLevelValues, cfg.Logging.DisplayLevel)
 	s.diskMinMode = indexValue(logLevelValues, cfg.Logging.DiskMinimumLevel)
@@ -133,16 +128,12 @@ func (u *desktopUI) loadSettings() {
 }
 
 func (u *desktopUI) applyTheme() {
-	if u.core.ManagerConfig().Appearance.Theme == "dark" {
-		u.th.Palette = material.Palette{
-			Bg:         color.NRGBA{R: 28, G: 30, B: 34, A: 255},
-			Fg:         color.NRGBA{R: 235, G: 237, B: 240, A: 255},
-			ContrastBg: color.NRGBA{R: 77, G: 108, B: 240, A: 255},
-			ContrastFg: color.NRGBA{R: 255, G: 255, B: 255, A: 255},
-		}
-		return
+	u.th.Palette = material.Palette{
+		Bg:         uiCanvas,
+		Fg:         uiText,
+		ContrastBg: uiAccent,
+		ContrastFg: uiText,
 	}
-	u.th.Palette = material.NewTheme().Palette
 }
 
 func (u *desktopUI) settingsConfig() (config.ManagerConfig, error) {
@@ -192,7 +183,7 @@ func (u *desktopUI) settingsConfig() (config.ManagerConfig, error) {
 	} else {
 		cfg.General.CloseBehavior = "minimize"
 	}
-	cfg.Appearance.Theme = []string{"system", "light", "dark"}[s.themeMode]
+	cfg.Appearance.Theme = "dark"
 	return cfg, nil
 }
 
@@ -201,9 +192,6 @@ func (u *desktopUI) settings(gtx layout.Context) layout.Dimensions {
 	u.handleManagerSelfUpdate(gtx)
 	for s.closeBtn.Clicked(gtx) {
 		s.closeMode = (s.closeMode + 1) % 2
-	}
-	for s.themeBtn.Clicked(gtx) {
-		s.themeMode = (s.themeMode + 1) % 3
 	}
 	for s.captureBtn.Clicked(gtx) {
 		s.captureMode = (s.captureMode + 1) % len(logLevelValues)
@@ -307,85 +295,114 @@ func (u *desktopUI) settings(gtx layout.Context) layout.Dimensions {
 	}
 
 	closeLabels := []string{"Hide to system tray", "Exit"}
-	themeLabels := []string{"System (light fallback)", "Light", "Dark"}
 	return u.list.Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(material.H6(u.th, "Manager Tunnel").Layout),
-			layout.Rigid(editorLine(u.th, &s.tunnel, "Manager Tunnel ID")),
-			layout.Rigid(editorLine(u.th, &s.runtimeKey, "OpenAI Runtime API key")),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Bottom: unit.Dp(6)}.Layout(gtx, material.Caption(u.th, "Enter only the key value. The credential reference is fixed internally and existing values are never displayed.").Layout)
-			}),
-			layout.Rigid(material.Button(u.th, &s.saveRuntimeKey, "Store API Key").Layout),
-
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, material.H6(u.th, "General").Layout)
-			}),
-			layout.Rigid(editorLine(u.th, &s.idle, "Default Managed idle timeout seconds")),
-			layout.Rigid(material.CheckBox(u.th, &s.launch, "Launch at login").Layout),
-			layout.Rigid(material.CheckBox(u.th, &s.startMinimized, "Start hidden in system tray").Layout),
-			layout.Rigid(material.CheckBox(u.th, &s.confirm, "Confirm explicit exit").Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{}.Layout(gtx,
-					layout.Rigid(buttonInset(u.th, &s.closeBtn, "Close behavior: "+closeLabels[s.closeMode])),
-					layout.Rigid(buttonInset(u.th, &s.themeBtn, "Theme: "+themeLabels[s.themeMode])),
+			layout.Rigid(card(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(sectionTitle(u.th, "Manager Tunnel")),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(9)}.Layout(gtx) }),
+					layout.Rigid(editorLine(u.th, &s.tunnel, "Manager Tunnel ID")),
+					layout.Rigid(editorLine(u.th, &s.runtimeKey, "OpenAI Runtime API key")),
+					layout.Rigid(mut edCaptionPlaceholder()),
+					layout.Rigid(primaryButton(u.th, &s.saveRuntimeKey, "Store API Key")),
 				)
-			}),
-
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, material.H6(u.th, "Logging").Layout)
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{}.Layout(gtx,
-					layout.Rigid(buttonInset(u.th, &s.captureBtn, "Capture: "+strings.ToUpper(logLevelValues[s.captureMode]))),
-					layout.Rigid(buttonInset(u.th, &s.displayBtn, "Default display: "+strings.ToUpper(displayLevelValues[s.displayMode]))),
-					layout.Rigid(buttonInset(u.th, &s.diskMinBtn, "Disk minimum: "+strings.ToUpper(logLevelValues[s.diskMinMode]))),
+			})),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
+			layout.Rigid(card(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(sectionTitle(u.th, "General")),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(9)}.Layout(gtx) }),
+					layout.Rigid(editorLine(u.th, &s.idle, "Default Managed idle timeout seconds")),
+					layout.Rigid(material.CheckBox(u.th, &s.launch, "Launch at login").Layout),
+					layout.Rigid(material.CheckBox(u.th, &s.startMinimized, "Start hidden in system tray").Layout),
+					layout.Rigid(material.CheckBox(u.th, &s.confirm, "Confirm explicit exit").Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, secondaryButton(u.th, &s.closeBtn, "Close behavior: "+closeLabels[s.closeMode]))
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Top: unit.Dp(9)}.Layout(gtx, mutedCaption(u.th, "Appearance is intentionally dark-only; light and system themes are no longer exposed."))
+					}),
 				)
-			}),
-			layout.Rigid(editorLine(u.th, &s.memory, "Log memory budget MB (5, 10, 25, 50, or 100)")),
-			layout.Rigid(material.CheckBox(u.th, &s.disk, "Write bounded rotating logs to disk").Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{}.Layout(gtx,
-					layout.Flexed(1, editorLine(u.th, &s.maxFile, "Maximum log file size MB")),
-					layout.Flexed(1, editorLine(u.th, &s.keepFiles, "Retained log files")),
+			})),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
+			layout.Rigid(card(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(sectionTitle(u.th, "Logging")),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(9)}.Layout(gtx) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{}.Layout(gtx,
+							layout.Rigid(secondaryButton(u.th, &s.captureBtn, "Capture: "+strings.ToUpper(logLevelValues[s.captureMode]))),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+							layout.Rigid(secondaryButton(u.th, &s.displayBtn, "Display: "+strings.ToUpper(displayLevelValues[s.displayMode]))),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+							layout.Rigid(secondaryButton(u.th, &s.diskMinBtn, "Disk: "+strings.ToUpper(logLevelValues[s.diskMinMode]))),
+						)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(10)}.Layout(gtx) }),
+					layout.Rigid(editorLine(u.th, &s.memory, "Log memory budget MB (5, 10, 25, 50, or 100)")),
+					layout.Rigid(material.CheckBox(u.th, &s.disk, "Write bounded rotating logs to disk").Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							return layout.Flex{}.Layout(gtx,
+								layout.Flexed(1, editorLine(u.th, &s.maxFile, "Maximum log file size MB")),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(9)}.Layout(gtx) }),
+								layout.Flexed(1, editorLine(u.th, &s.keepFiles, "Retained log files")),
+							)
+						})
+					}),
 				)
-			}),
-
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, material.H6(u.th, "Custom Secrets").Layout)
-			}),
-			layout.Rigid(material.Caption(u.th, "Use custom secret references only for downstream MCP servers or environment values you define yourself.").Layout),
-			layout.Rigid(editorLine(u.th, &s.secretRef, "Custom secret reference (secret://...)")),
-			layout.Rigid(editorLine(u.th, &s.secretVal, "Custom secret value")),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{}.Layout(gtx,
-					layout.Rigid(material.Button(u.th, &s.store, "Store Custom Secret").Layout),
-					layout.Rigid(buttonInset(u.th, &s.deleteSecret, "Delete Custom Secret")),
+			})),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
+			layout.Rigid(card(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(sectionTitle(u.th, "Custom Secrets")),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(9)}.Layout(gtx, mutedCaption(u.th, "Use custom secret references only for downstream MCP servers or environment values you define.")) }),
+					layout.Rigid(editorLine(u.th, &s.secretRef, "Custom secret reference (secret://...)")),
+					layout.Rigid(editorLine(u.th, &s.secretVal, "Custom secret value")),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{}.Layout(gtx,
+							layout.Rigid(primaryButton(u.th, &s.store, "Store Secret")),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+							layout.Rigid(dangerButton(u.th, &s.deleteSecret, "Delete Secret")),
+						)
+					}),
 				)
-			}),
-
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, material.H6(u.th, "Tunnel Client").Layout)
-			}),
-			layout.Rigid(editorLine(u.th, &s.binary, "Binary override (blank = managed install)")),
-			layout.Rigid(editorLine(u.th, &s.interval, "Update check interval hours")),
-			layout.Rigid(material.CheckBox(u.th, &s.autoUpdate, "Auto-update tunnel-client").Layout),
-			layout.Rigid(buttonInset(u.th, &s.channelBtn, "Update channel: "+channelValues[s.channelMode])),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{}.Layout(gtx,
-					layout.Rigid(material.Button(u.th, &s.check, "Check Update").Layout),
-					layout.Rigid(buttonInset(u.th, &s.install, "Install Latest")),
-					layout.Rigid(buttonInset(u.th, &s.rollback, "Roll Back")),
+			})),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
+			layout.Rigid(card(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(sectionTitle(u.th, "Tunnel Client")),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(9)}.Layout(gtx) }),
+					layout.Rigid(editorLine(u.th, &s.binary, "Binary override (blank = managed install)")),
+					layout.Rigid(editorLine(u.th, &s.interval, "Update check interval hours")),
+					layout.Rigid(material.CheckBox(u.th, &s.autoUpdate, "Auto-update tunnel-client").Layout),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, secondaryButton(u.th, &s.channelBtn, "Update channel: "+channelValues[s.channelMode])) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Top: unit.Dp(9)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							return layout.Flex{}.Layout(gtx,
+								layout.Rigid(secondaryButton(u.th, &s.check, "Check Update")),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+								layout.Rigid(primaryButton(u.th, &s.install, "Install Latest")),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+								layout.Rigid(secondaryButton(u.th, &s.rollback, "Roll Back")),
+							)
+						})
+					}),
 				)
-			}),
+			})),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
+			layout.Rigid(card(u.managerSelfUpdateSection)),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, u.managerSelfUpdateSection)
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(14)}.Layout(gtx, material.Button(u.th, &s.save, "Save Settings").Layout)
+				return layout.Inset{Top: unit.Dp(14), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.E.Layout(gtx, primaryButton(u.th, &s.save, "Save Settings"))
+				})
 			}),
 		)
 	})
+}
+
+func mutedCaptionPlaceholder() layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions { return layout.Dimensions{} }
 }
 
 func (u *desktopUI) persistLogDisplayLevel(level string) {
@@ -454,19 +471,30 @@ func (u *desktopUI) logPage(gtx layout.Context) layout.Dimensions {
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-				layout.Flexed(1, material.Editor(u.th, &u.logSearch, "Search logs").Layout),
-				layout.Rigid(buttonInset(u.th, &u.levelBtn, "Level: "+levels[u.logLevel])),
-				layout.Rigid(buttonInset(u.th, &u.exportText, "Export Text")),
-				layout.Rigid(buttonInset(u.th, &u.exportJSON, "Export JSONL")),
-				layout.Rigid(buttonInset(u.th, &u.clearLogs, "Clear")),
+				layout.Flexed(1, inputSurface(func(gtx layout.Context) layout.Dimensions {
+					style := material.Editor(u.th, &u.logSearch, "Search logs")
+					style.Color = uiText
+					style.HintColor = uiFaint
+					return style.Layout(gtx)
+				})),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+				layout.Rigid(secondaryButton(u.th, &u.levelBtn, "Level: "+levels[u.logLevel])),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+				layout.Rigid(secondaryButton(u.th, &u.exportText, "Text")),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+				layout.Rigid(secondaryButton(u.th, &u.exportJSON, "JSONL")),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+				layout.Rigid(dangerButton(u.th, &u.clearLogs, "Clear")),
 			)
 		}),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Spacer{Height: unit.Dp(8)}.Layout(gtx)
-		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(8)}.Layout(gtx) }),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			return u.logs.Layout(gtx, len(filtered), func(gtx layout.Context, i int) layout.Dimensions {
-				return layout.Inset{Bottom: unit.Dp(3)}.Layout(gtx, material.Caption(u.th, filtered[i]).Layout)
+				return layout.Inset{Bottom: unit.Dp(4)}.Layout(gtx, surface(uiSurfaceRaised, unit.Dp(7), layout.Inset{Top: unit.Dp(5), Bottom: unit.Dp(5), Left: unit.Dp(8), Right: unit.Dp(8)}, func(gtx layout.Context) layout.Dimensions {
+					label := material.Caption(u.th, filtered[i])
+					label.Color = uiMuted
+					return label.Layout(gtx)
+				}))
 			})
 		}),
 	)
