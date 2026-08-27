@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -196,9 +197,30 @@ type combined struct {
 }
 
 func newCombined(t tunnelRuntime, p ownedProcess, shutdown time.Duration) *combined {
+	// A nil concrete pointer assigned to an interface is not equal to nil in Go.
+	// Stdio entries have no separately-owned MCP process and previously passed a
+	// nil *proc.Managed here, which looked non-nil and caused watch() to invoke a
+	// method on the nil pointer. Normalize all nil-capable interface values at
+	// this boundary so optional runtimes behave as genuinely absent.
+	if nilOwnedProcess(p) {
+		p = nil
+	}
 	c := &combined{tunnel: t, owned: p, shutdown: shutdown, done: make(chan struct{})}
 	go c.watch()
 	return c
+}
+
+func nilOwnedProcess(p ownedProcess) bool {
+	if p == nil {
+		return true
+	}
+	v := reflect.ValueOf(p)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 func (c *combined) watch() {
