@@ -123,6 +123,21 @@ func TestSemanticTunnelClientLevelsRespectCapture(t *testing.T) {
 	}
 }
 
+func TestLegacyDefaultCaptureRetainsDiagnostics(t *testing.T) {
+	l, err := New(t.TempDir(), "info", 25, false, "debug", 10, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	l.Log(Info, "Manager", "Tunnel Client", `{"level":"INFO","msg":"run","stacktrace":{"0":"fx"},"moduletrace":{"0":"fx"}}`, nil)
+	l.Log(Info, "Manager", "Tunnel Client", `{"level":"INFO","msg":"poller started","component":"controlplane"}`, nil)
+
+	events := l.Ring().Snapshot()
+	if len(events) != 2 || events[0].Level != Trace || events[1].Level != Debug {
+		t.Fatalf("legacy defaults should retain trace/debug diagnostics: %#v", events)
+	}
+}
+
 func TestLifecycleLevelsAreOperatorFacing(t *testing.T) {
 	l, err := New(t.TempDir(), "trace", 5, false, "debug", 1, 1)
 	if err != nil {
