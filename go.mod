@@ -1,10 +1,11 @@
 module github.com/madesai98/GPT-Tunnel-Manager
 
-go 1.24.0
+go 1.25.0
 
 require (
 	fyne.io/systray v1.12.2
 	gioui.org v0.10.1
+	github.com/modelcontextprotocol/go-sdk v1.7.0
 	golang.org/x/sys v0.39.0
 )
 
