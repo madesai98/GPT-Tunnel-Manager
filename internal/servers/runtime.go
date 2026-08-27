@@ -26,6 +26,16 @@ type RuntimeFactory interface {
 	Start(context.Context, config.ServerEntry) (Runtime, error)
 }
 
+type tunnelRuntime interface {
+	Runtime
+}
+
+type ownedProcess interface {
+	Done() <-chan struct{}
+	Err() error
+	Stop(context.Context, time.Duration) error
+}
+
 type Factory struct {
 	Installer            *tunnelclient.Installer
 	Secrets              secrets.Store
@@ -166,15 +176,15 @@ func mapEnv(m map[string]string) []string {
 }
 
 type combined struct {
-	tunnel   *tunnelclient.Runtime
-	owned    *proc.Managed
+	tunnel   tunnelRuntime
+	owned    ownedProcess
 	shutdown time.Duration
 	done     chan struct{}
 	mu       sync.RWMutex
 	err      error
 }
 
-func newCombined(t *tunnelclient.Runtime, p *proc.Managed, shutdown time.Duration) *combined {
+func newCombined(t tunnelRuntime, p ownedProcess, shutdown time.Duration) *combined {
 	c := &combined{tunnel: t, owned: p, shutdown: shutdown, done: make(chan struct{})}
 	go c.watch()
 	return c
