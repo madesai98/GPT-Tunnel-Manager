@@ -285,34 +285,17 @@ func (u *desktopUI) signalShow() {
 }
 
 func (u *desktopUI) showWindow() {
-	u.mu.Lock()
+	u.mu.RLock()
 	exiting := u.exiting
-	hidden := u.windowHidden
 	win := u.win
-	if hidden && u.hidePending && win != nil && !exiting {
-		u.hidePending = false
-		u.windowHidden = false
-		hidden = false
-	}
-	u.mu.Unlock()
+	u.mu.RUnlock()
 	if exiting {
 		return
 	}
-	if hidden && win != nil && restoreDesktopWindow() {
-		u.mu.Lock()
-		u.windowHidden = false
-		u.mu.Unlock()
-		win.Option(gioapp.Windowed.Option())
-		win.Perform(system.ActionRaise)
-		win.Invalidate()
-		return
-	}
-	if !hidden && win != nil {
-		win.Option(gioapp.Windowed.Option())
-		win.Perform(system.ActionRaise)
-		win.Invalidate()
-		return
-	}
+
+	// Tray callbacks run outside Gio's window event loop. Only enqueue the
+	// request here; handleShowRequest performs Gio window operations from the
+	// window loop, while the hidden-state loop recreates the window if needed.
 	u.signalShow()
 	if win != nil {
 		win.Invalidate()
@@ -602,6 +585,7 @@ func (u *desktopUI) trayReady() {
 	systray.SetTitle("GPT Tunnel Manager")
 	systray.SetTooltip("GPT Tunnel Manager")
 	systray.SetOnTapped(u.showWindow)
+	systray.SetOnSecondaryTapped(u.showWindow)
 
 	open := systray.AddMenuItem("Open Manager", "Show the GPT Tunnel Manager window")
 	status := systray.AddMenuItem("Status", "Runtime status summary")
