@@ -22,21 +22,41 @@ type Runtime interface {
 	Stop(context.Context) error
 }
 
+type RuntimeFactory interface {
+	Start(context.Context, config.ServerEntry) (Runtime, error)
+}
+
 type Factory struct {
 	Installer            *tunnelclient.Installer
-	BinaryOverride       string
-	Channel              string
 	Secrets              secrets.Store
 	DefaultCredentialRef string
 	HealthRoot           string
 	Log                  *logging.Logger
+
+	mu             sync.RWMutex
+	BinaryOverride string
+	Channel        string
+}
+
+func (f *Factory) SetTunnelClientConfig(binaryOverride, channel string) {
+	f.mu.Lock()
+	f.BinaryOverride = binaryOverride
+	f.Channel = channel
+	f.mu.Unlock()
+}
+
+func (f *Factory) tunnelClientConfig() (string, string) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.BinaryOverride, f.Channel
 }
 
 func (f *Factory) active(ctx context.Context) (tunnelclient.Active, error) {
 	if f.Installer == nil {
 		return tunnelclient.Active{}, errors.New("tunnel-client installer is unavailable")
 	}
-	return f.Installer.EnsureChannel(ctx, f.BinaryOverride, f.Channel)
+	binaryOverride, channel := f.tunnelClientConfig()
+	return f.Installer.EnsureChannel(ctx, binaryOverride, channel)
 }
 
 func (f *Factory) Start(ctx context.Context, e config.ServerEntry) (Runtime, error) {
