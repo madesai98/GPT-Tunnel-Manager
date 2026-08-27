@@ -1,0 +1,48 @@
+name: Release Page
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/release-page.json
+      - .github/release-page.md
+      - .github/workflows/release-page.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-page
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update GitHub release page
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(jq -r '.version' .github/release-page.json)"
+          TITLE="$(jq -r '.title' .github/release-page.json)"
+
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $VERSION" >&2
+            exit 1
+          fi
+          if [[ -z "$TITLE" || "$TITLE" == "null" ]]; then
+            echo "Release title must not be empty" >&2
+            exit 1
+          fi
+          if ! gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION does not exist yet" >&2
+            exit 1
+          fi
+
+          gh release edit "$VERSION" \
+            --title "$TITLE" \
+            --notes-file .github/release-page.md
