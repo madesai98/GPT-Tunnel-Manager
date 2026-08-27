@@ -69,7 +69,17 @@ func (f *Factory) active(ctx context.Context) (tunnelclient.Active, error) {
 	return f.Installer.EnsureChannel(ctx, binaryOverride, channel)
 }
 
-func (f *Factory) Start(ctx context.Context, e config.ServerEntry) (Runtime, error) {
+func (f *Factory) Start(ctx context.Context, e config.ServerEntry) (runtime Runtime, err error) {
+	// Server runtimes execute third-party MCP processes through tunnel-client.
+	// Keep any unexpected panic in startup plumbing contained to this server so
+	// one incompatible MCP cannot terminate GPT Tunnel Manager itself.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			runtime = nil
+			err = fmt.Errorf("server runtime startup panic: %v", recovered)
+		}
+	}()
+
 	active, err := f.active(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("ensure tunnel-client: %w", err)
@@ -176,12 +186,13 @@ func mapEnv(m map[string]string) []string {
 }
 
 type combined struct {
-	tunnel   tunnelRuntime
-	owned    ownedProcess
-	shutdown time.Duration
-	done     chan struct{}
-	mu       sync.RWMutex
-	err      error
+	tunnel     tunnelRuntime
+	owned      ownedProcess
+	shutdown   time.Duration
+	done       chan struct{}
+	finishOnce sync.Once
+	mu         sync.RWMutex
+	err        error
 }
 
 func newCombined(t tunnelRuntime, p ownedProcess, shutdown time.Duration) *combined {
@@ -191,6 +202,12 @@ func newCombined(t tunnelRuntime, p ownedProcess, shutdown time.Duration) *combi
 }
 
 func (c *combined) watch() {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			c.finish(fmt.Errorf("server runtime watcher panic: %v", recovered))
+		}
+	}()
+
 	if c.owned == nil {
 		<-c.tunnel.Done()
 		c.finish(c.tunnel.Err())
@@ -229,10 +246,12 @@ func (c *combined) watch() {
 }
 
 func (c *combined) finish(err error) {
-	c.mu.Lock()
-	c.err = err
-	c.mu.Unlock()
-	close(c.done)
+	c.finishOnce.Do(func() {
+		c.mu.Lock()
+		c.err = err
+		c.mu.Unlock()
+		close(c.done)
+	})
 }
 
 func (c *combined) Done() <-chan struct{} { return c.done }
