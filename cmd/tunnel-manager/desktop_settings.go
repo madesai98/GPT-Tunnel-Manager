@@ -303,7 +303,9 @@ func (u *desktopUI) settings(gtx layout.Context) layout.Dimensions {
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(9)}.Layout(gtx) }),
 					layout.Rigid(editorLine(u.th, &s.tunnel, "Manager Tunnel ID")),
 					layout.Rigid(editorLine(u.th, &s.runtimeKey, "OpenAI Runtime API key")),
-					layout.Rigid(mut edCaptionPlaceholder()),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Bottom: unit.Dp(9)}.Layout(gtx, mutedCaption(u.th, "Enter only the key value. Existing secret values are never displayed."))
+					}),
 					layout.Rigid(primaryButton(u.th, &s.saveRuntimeKey, "Store API Key")),
 				)
 			})),
@@ -320,7 +322,7 @@ func (u *desktopUI) settings(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, secondaryButton(u.th, &s.closeBtn, "Close behavior: "+closeLabels[s.closeMode]))
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Top: unit.Dp(9)}.Layout(gtx, mutedCaption(u.th, "Appearance is intentionally dark-only; light and system themes are no longer exposed."))
+						return layout.Inset{Top: unit.Dp(9)}.Layout(gtx, mutedCaption(u.th, "Appearance is dark-only. Light and system theme modes have been removed."))
 					}),
 				)
 			})),
@@ -399,10 +401,6 @@ func (u *desktopUI) settings(gtx layout.Context) layout.Dimensions {
 			}),
 		)
 	})
-}
-
-func mutedCaptionPlaceholder() layout.Widget {
-	return func(gtx layout.Context) layout.Dimensions { return layout.Dimensions{} }
 }
 
 func (u *desktopUI) persistLogDisplayLevel(level string) {
