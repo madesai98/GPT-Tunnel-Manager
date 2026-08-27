@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -16,6 +15,12 @@ import (
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/buildinfo"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/lifecycle"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/servers"
+)
+
+const (
+	legacyProtocolVersion = "2025-06-18"
+	modernProtocolVersion = "2026-07-28"
+	discoveryTTLMillis     = 5 * 60 * 1000
 )
 
 type Server struct {
@@ -94,6 +99,11 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodPost {
+		// The embedded Manager MCP is intentionally stateless and does not offer
+		// a server-to-client SSE stream. In particular, do not advertise an
+		// Mcp-Session-Id during initialize unless GET/SSE session semantics are
+		// actually implemented.
+		w.Header().Set("Allow", "POST, OPTIONS, DELETE")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -113,15 +123,26 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	res := rpcResponse{JSONRPC: "2.0", ID: req.ID}
 	switch req.Method {
+	case "server/discover":
+		// MCP 2026-07-28 replaced the initialize/session handshake with
+		// per-request metadata and server/discover. ChatGPT may probe this method
+		// while creating a developer plugin, so answer it directly while keeping
+		// the legacy initialize path below for older clients and tunnel-client
+		// startup probes.
+		res.Result = discoverResult()
 	case "initialize":
-		w.Header().Set("Mcp-Session-Id", fmt.Sprintf("gtm-%d", time.Now().UnixNano()))
 		res.Result = map[string]any{
-			"protocolVersion": "2025-06-18",
+			"protocolVersion": legacyProtocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
 			"serverInfo":      map[string]any{"name": "gpt-tunnel-manager", "version": buildinfo.Version},
 		}
 	case "tools/list":
-		res.Result = map[string]any{"tools": tools()}
+		res.Result = map[string]any{
+			"resultType": "complete",
+			"tools":      tools(),
+			"ttlMs":      discoveryTTLMillis,
+			"cacheScope": "public",
+		}
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -141,6 +162,23 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		res.Error = &rpcError{Code: -32601, Message: "method not found"}
 	}
 	s.write(w, res)
+}
+
+func discoverResult() map[string]any {
+	return map[string]any{
+		"resultType":        "complete",
+		"supportedVersions": []string{modernProtocolVersion},
+		"capabilities":      map[string]any{"tools": map[string]any{}},
+		"_meta": map[string]any{
+			"io.modelcontextprotocol/serverInfo": map[string]any{
+				"name":    "gpt-tunnel-manager",
+				"version": buildinfo.Version,
+			},
+		},
+		"instructions": "Manage GPT Tunnel Manager server lifecycle state.",
+		"ttlMs":        discoveryTTLMillis,
+		"cacheScope":   "public",
+	}
 }
 
 func decodeStrict(raw []byte, v any) error {
@@ -201,6 +239,7 @@ func mutationSchema() map[string]any {
 func toolResult(v any, isErr bool) map[string]any {
 	b, _ := json.Marshal(v)
 	return map[string]any{
+		"resultType":        "complete",
 		"content":           []map[string]any{{"type": "text", "text": string(b)}},
 		"structuredContent": v,
 		"isError":           isErr,
