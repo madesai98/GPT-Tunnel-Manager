@@ -202,8 +202,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "$VERSION" \
-            dist/* \
-            --target "$GITHUB_SHA" \
-            --title "GPT Tunnel Manager $VERSION" \
-            --notes-file "dist/CHANGELOG-${VERSION}.md"
+          if ! gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release create "$VERSION" \
+              --target "$GITHUB_SHA" \
+              --title "GPT Tunnel Manager $VERSION" \
+              --notes-file "dist/CHANGELOG-${VERSION}.md"
+          fi
+          gh release upload "$VERSION" dist/* --clobber
