@@ -42,9 +42,6 @@ func fillRounded(gtx layout.Context, col color.NRGBA, radius unit.Dp) layout.Dim
 
 func surface(bg color.NRGBA, radius unit.Dp, inset layout.Inset, content layout.Widget) layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
-		if gtx.Constraints.Max.X > 0 {
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		}
 		return layout.Background{}.Layout(gtx,
 			func(gtx layout.Context) layout.Dimensions { return fillRounded(gtx, bg, radius) },
 			func(gtx layout.Context) layout.Dimensions { return inset.Layout(gtx, content) },
@@ -52,16 +49,25 @@ func surface(bg color.NRGBA, radius unit.Dp, inset layout.Inset, content layout.
 	}
 }
 
+func fillSurface(bg color.NRGBA, radius unit.Dp, inset layout.Inset, content layout.Widget) layout.Widget {
+	return func(gtx layout.Context) layout.Dimensions {
+		if gtx.Constraints.Max.X > 0 {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		}
+		return surface(bg, radius, inset, content)(gtx)
+	}
+}
+
 func card(content layout.Widget) layout.Widget {
-	return surface(uiSurface, unit.Dp(14), layout.UniformInset(unit.Dp(18)), content)
+	return fillSurface(uiSurface, unit.Dp(14), layout.UniformInset(unit.Dp(18)), content)
 }
 
 func compactCard(content layout.Widget) layout.Widget {
-	return surface(uiSurface, unit.Dp(12), layout.UniformInset(unit.Dp(14)), content)
+	return fillSurface(uiSurface, unit.Dp(12), layout.UniformInset(unit.Dp(14)), content)
 }
 
 func inputSurface(content layout.Widget) layout.Widget {
-	return surface(uiSurfaceRaised, unit.Dp(9), layout.Inset{Top: unit.Dp(7), Bottom: unit.Dp(7), Left: unit.Dp(10), Right: unit.Dp(10)}, content)
+	return fillSurface(uiSurfaceRaised, unit.Dp(9), layout.Inset{Top: unit.Dp(7), Bottom: unit.Dp(7), Left: unit.Dp(10), Right: unit.Dp(10)}, content)
 }
 
 func styledButton(th *material.Theme, click *widget.Clickable, label string, bg, fg color.NRGBA) layout.Widget {
