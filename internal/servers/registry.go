@@ -19,7 +19,7 @@ type serverStore interface {
 type Registry struct {
 	ctx         context.Context
 	store       serverStore
-	factory     *Factory
+	factory     RuntimeFactory
 	bus         *events.Bus
 	defaultIdle int
 
@@ -29,7 +29,7 @@ type Registry struct {
 	entries map[string]config.ServerEntry
 }
 
-func NewRegistry(ctx context.Context, store serverStore, cfg config.ServersConfig, defaultIdle int, f *Factory, b *events.Bus) *Registry {
+func NewRegistry(ctx context.Context, store serverStore, cfg config.ServersConfig, defaultIdle int, f RuntimeFactory, b *events.Bus) *Registry {
 	r := &Registry{
 		ctx:         ctx,
 		store:       store,
