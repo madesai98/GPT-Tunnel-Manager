@@ -42,6 +42,7 @@ type desktopUI struct {
 
 	serversNav  widget.Clickable
 	settingsNav widget.Clickable
+	logsNav     widget.Clickable
 	refresh     widget.Clickable
 	exit        widget.Clickable
 
@@ -101,8 +102,8 @@ func newDesktopUI(core *coreapp.App) *desktopUI {
 func (u *desktopUI) applyWindowOptions(win *gioapp.Window) {
 	win.Option(
 		gioapp.Title("GPT Tunnel Manager"),
-		gioapp.Size(unit.Dp(1120), unit.Dp(760)),
-		gioapp.MinSize(unit.Dp(780), unit.Dp(520)),
+		gioapp.Size(unit.Dp(1240), unit.Dp(820)),
+		gioapp.MinSize(unit.Dp(900), unit.Dp(620)),
 		gioapp.Decorated(false),
 	)
 }
@@ -121,11 +122,6 @@ func runDesktop(core *coreapp.App, setFocus func(func())) error {
 		setFocus(u.showWindow)
 	}
 
-	// On Windows, the systray HWND and its GetMessage loop must live on the
-	// same OS thread. RunWithExternalLoop creates the HWND during Register but
-	// starts GetMessage from another goroutine, which leaves tray click/menu
-	// messages on the original thread. Give systray its own locked OS thread
-	// and let its normal Run loop create and service the HWND there.
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
@@ -289,8 +285,6 @@ func (u *desktopUI) handleShowRequest(win *gioapp.Window) {
 
 	if hidden {
 		if !keepDesktopWindowAliveForTray() {
-			// Non-Windows tray hiding closes the native window. Leave the show
-			// request queued so the outer loop can recreate it after DestroyEvent.
 			u.signalShow()
 			return
 		}
@@ -328,9 +322,6 @@ func (u *desktopUI) showWindow() {
 		return
 	}
 
-	// Tray callbacks run outside Gio's window event loop. Only enqueue the
-	// request here; handleShowRequest performs Gio window operations from the
-	// window loop, while the hidden-state loop recreates the window if needed.
 	u.signalShow()
 	if win != nil {
 		win.Invalidate()
@@ -435,7 +426,7 @@ func (u *desktopUI) invalidate() {
 }
 
 func (u *desktopUI) layout(gtx layout.Context) layout.Dimensions {
-	paint.Fill(gtx.Ops, u.th.Bg)
+	paint.Fill(gtx.Ops, uiCanvas)
 	actions := u.deco.Update(gtx)
 	if actions&system.ActionMinimize != 0 {
 		u.hideToTray()
@@ -466,27 +457,121 @@ func (u *desktopUI) layout(gtx layout.Context) layout.Dimensions {
 			"GPT Tunnel Manager",
 		).Layout),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			return layout.UniformInset(unit.Dp(14)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+				layout.Rigid(u.sidebar),
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					return u.mainArea(gtx, confirmingExit)
+				}),
+			)
+		}),
+	)
+}
+
+func (u *desktopUI) sidebar(gtx layout.Context) layout.Dimensions {
+	for u.serversNav.Clicked(gtx) {
+		u.page = "servers"
+	}
+	for u.settingsNav.Clicked(gtx) {
+		u.page = "settings"
+		u.loadSettings()
+	}
+	for u.logsNav.Clicked(gtx) {
+		u.logsExpanded = !u.logsExpanded
+	}
+	for u.refresh.Clicked(gtx) {
+		u.invalidate()
+	}
+	for u.exit.Clicked(gtx) {
+		u.requestExit()
+	}
+
+	width := gtx.Dp(unit.Dp(226))
+	gtx.Constraints.Min.X = width
+	gtx.Constraints.Max.X = width
+
+	manager := u.core.ManagerSnapshot()
+	entries := u.core.Entries()
+	statusBg, statusFg, statusText := stateColors(manager.State, manager.Ready)
+	serversSelected := u.page == "servers" || u.page == "editor"
+
+	return surface(uiSidebar, 0, layout.Inset{Top: unit.Dp(24), Bottom: unit.Dp(20), Left: unit.Dp(18), Right: unit.Dp(18)}, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				brand := material.H6(u.th, "GPT TUNNEL")
+				brand.Color = uiText
+				return brand.Layout(gtx)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: unit.Dp(2)}.Layout(gtx, mutedCaption(u.th, "MANAGER · NATIVE GIO"))
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(28)}.Layout(gtx) }),
+			layout.Rigid(faintCaption(u.th, "WORKSPACE")),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(8)}.Layout(gtx) }),
+			layout.Rigid(navButton(u.th, &u.serversNav, "Servers", serversSelected)),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(7)}.Layout(gtx) }),
+			layout.Rigid(navButton(u.th, &u.settingsNav, "Settings", u.page == "settings")),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(7)}.Layout(gtx) }),
+			layout.Rigid(navButton(u.th, &u.logsNav, "Logs", u.logsExpanded)),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions { return layout.Spacer{}.Layout(gtx) }),
+			layout.Rigid(compactCard(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-					layout.Rigid(u.header),
+					layout.Rigid(faintCaption(u.th, "MANAGER MCP")),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Spacer{Height: unit.Dp(10)}.Layout(gtx)
-					}),
-					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-						if confirmingExit {
-							return u.exitDialog(gtx)
-						}
-						return u.body(gtx)
+						return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, pill(u.th, statusText, statusBg, statusFg))
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						if confirmingExit {
-							return layout.Dimensions{}
-						}
-						return u.logPane(gtx)
+						return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, mutedCaption(u.th, fmt.Sprintf("%d configured servers", len(entries))))
 					}),
-					layout.Rigid(u.footer),
 				)
-			})
+			})),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
+			layout.Rigid(navButton(u.th, &u.refresh, "Refresh", false)),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(7)}.Layout(gtx) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				return dangerButton(u.th, &u.exit, "Exit Manager")(gtx)
+			}),
+		)
+	})(gtx)
+}
+
+func (u *desktopUI) mainArea(gtx layout.Context, confirmingExit bool) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(24), Bottom: unit.Dp(14), Left: unit.Dp(26), Right: unit.Dp(26)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(u.pageHeader),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(18)}.Layout(gtx) }),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				if confirmingExit {
+					return u.exitDialog(gtx)
+				}
+				return u.body(gtx)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if confirmingExit {
+					return layout.Dimensions{}
+				}
+				return u.logPane(gtx)
+			}),
+			layout.Rigid(u.footer),
+		)
+	})
+}
+
+func (u *desktopUI) pageHeader(gtx layout.Context) layout.Dimensions {
+	title := "Servers"
+	subtitle := "Manage MCP runtimes, tunnel health, and lifecycle actions."
+	switch u.page {
+	case "settings":
+		title = "Settings"
+		subtitle = "Runtime behavior, logging, secrets, updates, and manager configuration."
+	case "editor":
+		title = "Server Editor"
+		subtitle = "Configure lifecycle, transport, environment, and tunnel details."
+	}
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(pageTitle(u.th, title)),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, mutedCaption(u.th, subtitle))
 		}),
 	)
 }
@@ -510,48 +595,31 @@ func (u *desktopUI) exitDialog(gtx layout.Context) layout.Dimensions {
 	}
 
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
-			layout.Rigid(material.H5(u.th, "Exit GPT Tunnel Manager?").Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(10), Bottom: unit.Dp(10)}.Layout(gtx,
-					material.Body1(u.th, "This will disconnect all tunnels and stop all MCP servers currently owned by Tunnel Manager.").Layout,
-				)
-			}),
-			layout.Rigid(material.CheckBox(u.th, &u.dontAskAgain, "Don't ask again").Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{}.Layout(gtx,
-						layout.Rigid(material.Button(u.th, &u.cancelExit, "Cancel").Layout),
-						layout.Rigid(buttonInset(u.th, &u.confirmExit, "Exit")),
+		maxWidth := gtx.Dp(unit.Dp(520))
+		if gtx.Constraints.Max.X > maxWidth {
+			gtx.Constraints.Max.X = maxWidth
+		}
+		return card(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(sectionTitle(u.th, "Exit GPT Tunnel Manager?")),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Top: unit.Dp(9), Bottom: unit.Dp(9)}.Layout(gtx,
+						mutedCaption(u.th, "This disconnects all tunnels and stops MCP servers currently owned by Tunnel Manager."),
 					)
-				})
-			}),
-		)
+				}),
+				layout.Rigid(material.CheckBox(u.th, &u.dontAskAgain, "Don't ask again").Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Top: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+							layout.Rigid(secondaryButton(u.th, &u.cancelExit, "Cancel")),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(8)}.Layout(gtx) }),
+							layout.Rigid(dangerButton(u.th, &u.confirmExit, "Exit Manager")),
+						)
+					})
+				}),
+			)
+		})(gtx)
 	})
-}
-
-func (u *desktopUI) header(gtx layout.Context) layout.Dimensions {
-	for u.serversNav.Clicked(gtx) {
-		u.page = "servers"
-	}
-	for u.settingsNav.Clicked(gtx) {
-		u.page = "settings"
-		u.loadSettings()
-	}
-	for u.refresh.Clicked(gtx) {
-		u.invalidate()
-	}
-	for u.exit.Clicked(gtx) {
-		u.requestExit()
-	}
-
-	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-		layout.Flexed(1, material.H6(u.th, "Runtime Control").Layout),
-		layout.Rigid(buttonInset(u.th, &u.serversNav, "Servers")),
-		layout.Rigid(buttonInset(u.th, &u.settingsNav, "Settings")),
-		layout.Rigid(buttonInset(u.th, &u.refresh, "Refresh")),
-		layout.Rigid(buttonInset(u.th, &u.exit, "Exit")),
-	)
 }
 
 func (u *desktopUI) body(gtx layout.Context) layout.Dimensions {
@@ -578,30 +646,34 @@ func (u *desktopUI) logPane(gtx layout.Context) layout.Dimensions {
 
 	header := func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-			layout.Flexed(1, material.Body1(u.th, fmt.Sprintf("Logs · %d events", count)).Layout),
-			layout.Rigid(material.Button(u.th, &u.logsToggle, toggleLabel).Layout),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(sectionTitle(u.th, "Logs")),
+					layout.Rigid(mutedCaption(u.th, fmt.Sprintf("%d captured events", count))),
+				)
+			}),
+			layout.Rigid(secondaryButton(u.th, &u.logsToggle, toggleLabel)),
 		)
 	}
 
-	return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		if !u.logsExpanded {
-			return header(gtx)
+			return compactCard(header)(gtx)
 		}
 
-		height := gtx.Dp(unit.Dp(260))
+		height := gtx.Dp(unit.Dp(285))
 		if height > gtx.Constraints.Max.Y {
 			height = gtx.Constraints.Max.Y
 		}
 		gtx.Constraints.Min.Y = height
 		gtx.Constraints.Max.Y = height
-
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(header),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Spacer{Height: unit.Dp(6)}.Layout(gtx)
-			}),
-			layout.Flexed(1, u.logPage),
-		)
+		return compactCard(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(header),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(10)}.Layout(gtx) }),
+				layout.Flexed(1, u.logPage),
+			)
+		})(gtx)
 	})
 }
 
@@ -615,12 +687,12 @@ func (u *desktopUI) footer(gtx layout.Context) layout.Dimensions {
 	if message == "" {
 		message = "Manager MCP: " + u.core.ManagerMCPURL()
 	}
-	return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, material.Caption(u.th, message).Layout)
+	return layout.Inset{Top: unit.Dp(9)}.Layout(gtx, faintCaption(u.th, message))
 }
 
 func buttonInset(th *material.Theme, button *widget.Clickable, label string) layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
-		return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, material.Button(th, button, label).Layout)
+		return layout.Inset{Left: unit.Dp(6)}.Layout(gtx, secondaryButton(th, button, label))
 	}
 }
 
@@ -707,7 +779,7 @@ func trayIcon() []byte {
 	for y := 2; y < 14; y++ {
 		for x := 2; x < 14; x++ {
 			if x == 2 || x == 13 || y == 2 || y == 13 || (x >= 6 && x <= 9) {
-				img.SetNRGBA(x, y, color.NRGBA{R: 75, G: 112, B: 240, A: 255})
+				img.SetNRGBA(x, y, color.NRGBA{R: 96, G: 125, B: 255, A: 255})
 			}
 		}
 	}
