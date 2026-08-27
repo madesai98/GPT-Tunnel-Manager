@@ -16,6 +16,7 @@ var (
 	desktopGetWindowThreadProcessID = desktopUser32.NewProc("GetWindowThreadProcessId")
 	desktopGetWindowTextLengthW     = desktopUser32.NewProc("GetWindowTextLengthW")
 	desktopGetWindowTextW           = desktopUser32.NewProc("GetWindowTextW")
+	desktopGetWindowRect            = desktopUser32.NewProc("GetWindowRect")
 	desktopIsWindow                 = desktopUser32.NewProc("IsWindow")
 	desktopIsWindowVisible          = desktopUser32.NewProc("IsWindowVisible")
 	desktopShowWindow               = desktopUser32.NewProc("ShowWindow")
@@ -24,6 +25,13 @@ var (
 	desktopWindowStateMu sync.Mutex
 	desktopWindowHWND    uintptr
 )
+
+type desktopRect struct {
+	Left   int32
+	Top    int32
+	Right  int32
+	Bottom int32
+}
 
 func desktopWindowTitle(hwnd uintptr) string {
 	length, _, _ := desktopGetWindowTextLengthW.Call(hwnd)
@@ -38,9 +46,24 @@ func desktopWindowTitle(hwnd uintptr) string {
 	return windows.UTF16ToString(buf[:n])
 }
 
+func desktopWindowArea(hwnd uintptr) int64 {
+	var rect desktopRect
+	ok, _, _ := desktopGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rect)))
+	if ok == 0 {
+		return 0
+	}
+	width := int64(rect.Right - rect.Left)
+	height := int64(rect.Bottom - rect.Top)
+	if width <= 0 || height <= 0 {
+		return 0
+	}
+	return width * height
+}
+
 func findDesktopWindow(visibleOnly bool) uintptr {
 	pid := uint32(os.Getpid())
 	var found uintptr
+	var foundArea int64
 	callback := windows.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
 		var windowPID uint32
 		desktopGetWindowThreadProcessID.Call(hwnd, uintptr(unsafe.Pointer(&windowPID)))
@@ -53,11 +76,25 @@ func findDesktopWindow(visibleOnly bool) uintptr {
 				return 1
 			}
 		}
-		if desktopWindowTitle(hwnd) != "GPT Tunnel Manager" {
+
+		area := desktopWindowArea(hwnd)
+		if area == 0 {
 			return 1
 		}
-		found = hwnd
-		return 0
+
+		// Prefer the expected Gio title when Windows exposes it, but do not
+		// require an exact title. Gio can briefly expose the native window with
+		// an empty/different caption even though it is the correct top-level UI.
+		if desktopWindowTitle(hwnd) == "GPT Tunnel Manager" {
+			found = hwnd
+			foundArea = area
+			return 0
+		}
+		if area > foundArea {
+			found = hwnd
+			foundArea = area
+		}
+		return 1
 	})
 	desktopEnumWindows.Call(callback, 0)
 	return found
