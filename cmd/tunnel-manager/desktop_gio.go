@@ -41,7 +41,6 @@ type desktopUI struct {
 	logs widget.List
 
 	serversNav  widget.Clickable
-	logsNav     widget.Clickable
 	settingsNav widget.Clickable
 	refresh     widget.Clickable
 	exit        widget.Clickable
@@ -50,12 +49,14 @@ type desktopUI struct {
 	form serverForm
 	set  settingsForm
 
-	logSearch  widget.Editor
-	logLevel   int
-	levelBtn   widget.Clickable
-	clearLogs  widget.Clickable
-	exportText widget.Clickable
-	exportJSON widget.Clickable
+	logSearch    widget.Editor
+	logLevel     int
+	levelBtn     widget.Clickable
+	clearLogs    widget.Clickable
+	exportText   widget.Clickable
+	exportJSON   widget.Clickable
+	logsToggle   widget.Clickable
+	logsExpanded bool
 
 	confirmingExit  bool
 	resetExitChoice bool
@@ -477,6 +478,12 @@ func (u *desktopUI) layout(gtx layout.Context) layout.Dimensions {
 						}
 						return u.body(gtx)
 					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if confirmingExit {
+							return layout.Dimensions{}
+						}
+						return u.logPane(gtx)
+					}),
 					layout.Rigid(u.footer),
 				)
 			})
@@ -527,9 +534,6 @@ func (u *desktopUI) header(gtx layout.Context) layout.Dimensions {
 	for u.serversNav.Clicked(gtx) {
 		u.page = "servers"
 	}
-	for u.logsNav.Clicked(gtx) {
-		u.page = "logs"
-	}
 	for u.settingsNav.Clicked(gtx) {
 		u.page = "settings"
 		u.loadSettings()
@@ -544,7 +548,6 @@ func (u *desktopUI) header(gtx layout.Context) layout.Dimensions {
 	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 		layout.Flexed(1, material.H6(u.th, "Runtime Control").Layout),
 		layout.Rigid(buttonInset(u.th, &u.serversNav, "Servers")),
-		layout.Rigid(buttonInset(u.th, &u.logsNav, "Logs")),
 		layout.Rigid(buttonInset(u.th, &u.settingsNav, "Settings")),
 		layout.Rigid(buttonInset(u.th, &u.refresh, "Refresh")),
 		layout.Rigid(buttonInset(u.th, &u.exit, "Exit")),
@@ -557,11 +560,49 @@ func (u *desktopUI) body(gtx layout.Context) layout.Dimensions {
 		return u.serverEditor(gtx)
 	case "settings":
 		return u.settings(gtx)
-	case "logs":
-		return u.logPage(gtx)
 	default:
 		return u.serversPage(gtx)
 	}
+}
+
+func (u *desktopUI) logPane(gtx layout.Context) layout.Dimensions {
+	for u.logsToggle.Clicked(gtx) {
+		u.logsExpanded = !u.logsExpanded
+	}
+
+	count := len(u.core.Logs())
+	toggleLabel := "Show"
+	if u.logsExpanded {
+		toggleLabel = "Hide"
+	}
+
+	header := func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+			layout.Flexed(1, material.Body1(u.th, fmt.Sprintf("Logs · %d events", count)).Layout),
+			layout.Rigid(material.Button(u.th, &u.logsToggle, toggleLabel).Layout),
+		)
+	}
+
+	return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if !u.logsExpanded {
+			return header(gtx)
+		}
+
+		height := gtx.Dp(unit.Dp(260))
+		if height > gtx.Constraints.Max.Y {
+			height = gtx.Constraints.Max.Y
+		}
+		gtx.Constraints.Min.Y = height
+		gtx.Constraints.Max.Y = height
+
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(header),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Spacer{Height: unit.Dp(6)}.Layout(gtx)
+			}),
+			layout.Flexed(1, u.logPage),
+		)
+	})
 }
 
 func (u *desktopUI) footer(gtx layout.Context) layout.Dimensions {
