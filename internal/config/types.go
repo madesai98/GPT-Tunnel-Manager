@@ -143,7 +143,7 @@ func DefaultManagerConfig() ManagerConfig {
 		},
 		ManagedDefaults: ManagedDefaults{IdleTimeoutSeconds: 300},
 		Logging: LoggingConfig{
-			CaptureLevel:      "info",
+			CaptureLevel:      "trace",
 			DisplayLevel:      "info",
 			MemoryLimitMB:     25,
 			DiskMinimumLevel:  "debug",
