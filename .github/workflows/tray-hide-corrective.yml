@@ -1,0 +1,52 @@
+name: Tray Hide Corrective Fix
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/tray-hide-corrective.yml
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: true
+      - name: Install Gio Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+      - name: Apply fix
+        run: python .github/apply_tray_fix.py
+      - name: Format
+        run: gofmt -w cmd/tunnel-manager/desktop_gio.go cmd/tunnel-manager/desktop_window_other.go cmd/tunnel-manager/desktop_window_windows.go
+      - name: Test
+        run: go test ./...
+      - name: Build native desktop app
+        run: go build ./cmd/tunnel-manager
+
+  commit:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply fix
+        run: python .github/apply_tray_fix.py
+      - name: Commit
+        run: |
+          gofmt -w cmd/tunnel-manager/desktop_gio.go cmd/tunnel-manager/desktop_window_other.go cmd/tunnel-manager/desktop_window_windows.go
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add cmd/tunnel-manager/desktop_gio.go cmd/tunnel-manager/desktop_window_other.go cmd/tunnel-manager/desktop_window_windows.go
+          git commit -m 'Fix minimize-to-tray hide timing on Windows'
+          git push origin HEAD:main
