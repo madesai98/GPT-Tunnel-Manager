@@ -88,7 +88,7 @@ func (r *Registry) Start(ctx context.Context, id string, src Source) (Snapshot, 
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return s.Start(ctx, src)
+	return r.startSupervisor(ctx, s, src)
 }
 
 func (r *Registry) Restart(ctx context.Context, id string, src Source) (Snapshot, error) {
@@ -177,6 +177,10 @@ func (r *Registry) Save(e config.ServerEntry) (config.ServerEntry, error) {
 	r.mu.Lock()
 	r.entries[e.ID] = e
 	r.mu.Unlock()
+	// An edit is an explicit user intervention. If this entry had been
+	// quarantined after a process-level crash, let the new configuration try
+	// again rather than forcing the user to edit files by hand.
+	r.clearStartupGuard(e.ID)
 	r.reconcileSaved(s, e, wasDesiredRunning)
 	return e, nil
 }
@@ -193,7 +197,7 @@ func (r *Registry) reconcileSaved(s *Supervisor, e config.ServerEntry, wasDesire
 func (r *Registry) startBestEffort(s *Supervisor, e config.ServerEntry) {
 	ctx, cancel := context.WithTimeout(r.ctx, e.StartupTimeout()+5*time.Second)
 	defer cancel()
-	_, _ = s.Start(ctx, SourceApp)
+	_, _ = r.startSupervisor(ctx, s, SourceApp)
 }
 
 func (r *Registry) Delete(ctx context.Context, id string) error {
@@ -230,6 +234,7 @@ func (r *Registry) Delete(ctx context.Context, id string) error {
 	delete(r.items, id)
 	delete(r.entries, id)
 	r.mu.Unlock()
+	r.clearStartupGuard(id)
 	return nil
 }
 
@@ -275,7 +280,7 @@ func (r *Registry) StartAlwaysOn(ctx context.Context) {
 			e := s.Entry()
 			c, cancel := context.WithTimeout(ctx, e.StartupTimeout()+5*time.Second)
 			defer cancel()
-			_, _ = s.Start(c, SourceApp)
+			_, _ = r.startSupervisor(c, s, SourceApp)
 		}()
 	}
 }
