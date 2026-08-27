@@ -291,6 +291,15 @@ func (u *desktopUI) showWindow() {
 	if exiting {
 		return
 	}
+	if hidden && win != nil && restoreDesktopWindow() {
+		u.mu.Lock()
+		u.windowHidden = false
+		u.mu.Unlock()
+		win.Option(gioapp.Windowed.Option())
+		win.Perform(system.ActionRaise)
+		win.Invalidate()
+		return
+	}
 	if !hidden && win != nil {
 		win.Option(gioapp.Windowed.Option())
 		win.Perform(system.ActionRaise)
@@ -312,6 +321,9 @@ func (u *desktopUI) hideToTray() {
 	win := u.win
 	u.windowHidden = true
 	u.mu.Unlock()
+	if hideDesktopWindow() {
+		return
+	}
 	win.Perform(system.ActionClose)
 }
 
