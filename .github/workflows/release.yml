@@ -104,7 +104,7 @@ jobs:
           BASENAME="GPT-Tunnel-Manager-${VERSION}-${OS}-${ARCH}"
           mkdir -p "stage/$BASENAME"
           EXT=""
-          LDFLAGS="-s -w -X main.version=${VERSION#v}"
+          LDFLAGS="-s -w -X github.com/madesai98/GPT-Tunnel-Manager/internal/buildinfo.Version=${VERSION#v}"
           if [[ "$OS" == windows ]]; then
             EXT=.exe
             LDFLAGS="$LDFLAGS -H=windowsgui"

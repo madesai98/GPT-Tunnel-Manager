@@ -21,7 +21,10 @@ import (
 	proc "github.com/madesai98/GPT-Tunnel-Manager/internal/process"
 )
 
-const latestURL = "https://api.github.com/repos/openai/tunnel-client/releases/latest"
+const (
+	latestURL   = "https://api.github.com/repos/openai/tunnel-client/releases/latest"
+	releasesURL = "https://api.github.com/repos/openai/tunnel-client/releases?per_page=30"
+)
 
 type Asset struct {
 	Name   string `json:"name"`
@@ -30,8 +33,10 @@ type Asset struct {
 }
 
 type Release struct {
-	TagName string  `json:"tag_name"`
-	Assets  []Asset `json:"assets"`
+	TagName    string  `json:"tag_name"`
+	Draft      bool    `json:"draft"`
+	Prerelease bool    `json:"prerelease"`
+	Assets     []Asset `json:"assets"`
 }
 
 type Active struct {
@@ -50,31 +55,67 @@ func NewInstaller(root string) *Installer {
 	return &Installer{Root: root, Client: &http.Client{Timeout: 2 * time.Minute}}
 }
 
+func normalizeChannel(channel string) string {
+	channel = strings.ToLower(strings.TrimSpace(channel))
+	if channel == "" {
+		return "stable"
+	}
+	return channel
+}
+
 func (i *Installer) CheckLatest(ctx context.Context) (Release, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestURL, nil)
+	return i.CheckChannel(ctx, "stable")
+}
+
+func (i *Installer) CheckChannel(ctx context.Context, channel string) (Release, error) {
+	switch normalizeChannel(channel) {
+	case "stable":
+		var release Release
+		if err := i.getJSON(ctx, latestURL, &release); err != nil {
+			return Release{}, err
+		}
+		if release.TagName == "" {
+			return release, errors.New("latest tunnel-client release is missing a tag")
+		}
+		return release, nil
+	case "prerelease":
+		var releases []Release
+		if err := i.getJSON(ctx, releasesURL, &releases); err != nil {
+			return Release{}, err
+		}
+		for _, release := range releases {
+			if !release.Draft && release.Prerelease && release.TagName != "" {
+				return release, nil
+			}
+		}
+		return Release{}, errors.New("no tunnel-client prerelease is currently published")
+	default:
+		return Release{}, fmt.Errorf("unsupported tunnel-client channel %q", channel)
+	}
+}
+
+func (i *Installer) getJSON(ctx context.Context, url string, dst any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return Release{}, err
+		return err
 	}
 	req.Header.Set("User-Agent", "GPT-Tunnel-Manager")
 	resp, err := i.Client.Do(req)
 	if err != nil {
-		return Release{}, err
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return Release{}, fmt.Errorf("release metadata HTTP %s", resp.Status)
+		return fmt.Errorf("release metadata HTTP %s", resp.Status)
 	}
-	var r Release
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&r); err != nil {
-		return r, err
-	}
-	if r.TagName == "" {
-		return r, errors.New("latest tunnel-client release is missing a tag")
-	}
-	return r, nil
+	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(dst)
 }
 
 func (i *Installer) Ensure(ctx context.Context, override string) (Active, error) {
+	return i.EnsureChannel(ctx, override, "stable")
+}
+
+func (i *Installer) EnsureChannel(ctx context.Context, override, channel string) (Active, error) {
 	if override != "" {
 		if _, err := os.Stat(override); err != nil {
 			return Active{}, err
@@ -86,11 +127,15 @@ func (i *Installer) Ensure(ctx context.Context, override string) (Active, error)
 			return a, nil
 		}
 	}
-	return i.InstallLatest(ctx)
+	return i.InstallChannel(ctx, channel)
 }
 
 func (i *Installer) InstallLatest(ctx context.Context) (Active, error) {
-	r, err := i.CheckLatest(ctx)
+	return i.InstallChannel(ctx, "stable")
+}
+
+func (i *Installer) InstallChannel(ctx context.Context, channel string) (Active, error) {
+	r, err := i.CheckChannel(ctx, channel)
 	if err != nil {
 		return Active{}, err
 	}

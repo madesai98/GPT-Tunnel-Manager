@@ -12,6 +12,7 @@ import (
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/config"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/events"
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/lifecycle"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/lifecycleskill"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/logging"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/mcpmanager"
@@ -36,6 +37,7 @@ type App struct {
 	cancel       context.CancelFunc
 	done         chan struct{}
 	shutdownOnce sync.Once
+	settingsMu   sync.Mutex
 
 	store       *config.Store
 	cfgMu       sync.RWMutex
@@ -52,6 +54,7 @@ type App struct {
 	mgrRuntime *tunnelclient.Runtime
 	mgrGen     uint64
 	mgrStatus  managerStatus
+	mgrBackoff *lifecycle.Backoff
 
 	latestMu sync.RWMutex
 	latest   string
@@ -85,9 +88,20 @@ func New(root, exe string) (*App, error) {
 			return nil, getErr
 		}
 	}
+
+	managerChanged := false
 	if managerCfg.ManagerTunnel.RuntimeCredentialRef != config.ManagerRuntimeCredentialRef || !managerCfg.General.MinimizeToTray {
 		managerCfg.ManagerTunnel.RuntimeCredentialRef = config.ManagerRuntimeCredentialRef
 		managerCfg.General.MinimizeToTray = true
+		managerChanged = true
+	}
+	// The operating system is authoritative for launch-at-login. Reconcile a
+	// stale persisted value so the UI reports what will actually happen.
+	if enabled, launchErr := platform.LaunchAtStartupEnabled(exe); launchErr == nil && enabled != managerCfg.General.LaunchAtStartup {
+		managerCfg.General.LaunchAtStartup = enabled
+		managerChanged = true
+	}
+	if managerChanged {
 		if err := store.SaveManager(managerCfg); err != nil {
 			cancel()
 			return nil, err
@@ -113,6 +127,7 @@ func New(root, exe string) (*App, error) {
 	factory := &servers.Factory{
 		Installer:            installer,
 		BinaryOverride:       managerCfg.TunnelClient.BinaryPath,
+		Channel:              managerCfg.TunnelClient.Channel,
 		Secrets:              secretStore,
 		DefaultCredentialRef: config.ManagerRuntimeCredentialRef,
 		HealthRoot:           filepath.Join(root, "data", "tunnel-client", "state"),
@@ -134,6 +149,7 @@ func New(root, exe string) (*App, error) {
 		installer:   installer,
 		factory:     factory,
 		registry:    registry,
+		mgrBackoff:  lifecycle.NewBackoff(time.Now().UnixNano()),
 	}
 	a.mcp = mcpmanager.New(registry)
 
@@ -232,6 +248,7 @@ func (a *App) restartManagerTunnel() {
 	cfg := a.managerCfg
 	a.cfgMu.RUnlock()
 	if cfg.ManagerTunnel.TunnelID == "" {
+		a.mgrBackoff.Reset()
 		a.setManagerStatus(generation, managerStatus{State: "not_configured"})
 		return
 	}
@@ -239,7 +256,7 @@ func (a *App) restartManagerTunnel() {
 	ctx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
 	defer cancel()
 
-	active, err := a.installer.Ensure(ctx, cfg.TunnelClient.BinaryPath)
+	active, err := a.installer.EnsureChannel(ctx, cfg.TunnelClient.BinaryPath, cfg.TunnelClient.Channel)
 	if err != nil {
 		a.managerStartFailed(generation, err)
 		return
@@ -283,6 +300,7 @@ func (a *App) restartManagerTunnel() {
 
 	a.bus.Publish(events.Event{Kind: events.TunnelReady})
 	go a.watchManager(generation, runtime)
+	go a.resetManagerBackoff(generation, runtime)
 }
 
 func (a *App) setManagerStatus(generation uint64, status managerStatus) {
@@ -299,19 +317,7 @@ func (a *App) managerStartFailed(generation uint64, err error) {
 	if a.ctx.Err() != nil {
 		return
 	}
-	go func() {
-		select {
-		case <-a.ctx.Done():
-			return
-		case <-time.After(5 * time.Second):
-		}
-		a.mgrMu.Lock()
-		valid := generation == a.mgrGen
-		a.mgrMu.Unlock()
-		if valid {
-			a.restartManagerTunnel()
-		}
-	}()
+	a.scheduleManagerRetry(generation)
 }
 
 func (a *App) watchManager(generation uint64, runtime *tunnelclient.Runtime) {
@@ -333,46 +339,116 @@ func (a *App) watchManager(generation uint64, runtime *tunnelclient.Runtime) {
 		Kind:   events.TunnelDisconnected,
 		Fields: map[string]any{"error": fmt.Sprint(runtime.Err())},
 	})
+	a.scheduleManagerRetry(generation)
+}
+
+func (a *App) scheduleManagerRetry(generation uint64) {
+	delay := a.mgrBackoff.Next()
+	a.log.Log(logging.Warn, "Manager", "Tunnel", "manager tunnel retry scheduled", map[string]any{"after": delay.String()})
 	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
 		select {
 		case <-a.ctx.Done():
 			return
-		case <-time.After(3 * time.Second):
+		case <-timer.C:
+		}
+		a.mgrMu.Lock()
+		valid := generation == a.mgrGen && a.mgrRuntime == nil
+		a.mgrMu.Unlock()
+		if valid {
 			a.restartManagerTunnel()
 		}
 	}()
 }
 
+func (a *App) resetManagerBackoff(generation uint64, runtime *tunnelclient.Runtime) {
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-a.ctx.Done():
+		return
+	case <-runtime.Done():
+		return
+	case <-timer.C:
+	}
+	a.mgrMu.Lock()
+	stable := generation == a.mgrGen && a.mgrRuntime == runtime
+	a.mgrMu.Unlock()
+	if stable {
+		a.mgrBackoff.Reset()
+	}
+}
+
+func managerLoggingRuntimeChanged(old, next config.LoggingConfig) bool {
+	return old.CaptureLevel != next.CaptureLevel ||
+		old.MemoryLimitMB != next.MemoryLimitMB ||
+		old.WriteToDisk != next.WriteToDisk ||
+		old.DiskMinimumLevel != next.DiskMinimumLevel ||
+		old.MaximumFileSizeMB != next.MaximumFileSizeMB ||
+		old.KeepFiles != next.KeepFiles
+}
+
 func (a *App) SaveManager(ctx context.Context, cfg config.ManagerConfig) error {
+	a.settingsMu.Lock()
+	defer a.settingsMu.Unlock()
+
 	cfg.ManagerTunnel.RuntimeCredentialRef = config.ManagerRuntimeCredentialRef
 	cfg.General.MinimizeToTray = true
 	if err := config.ValidateManager(cfg); err != nil {
 		return err
 	}
 
-	a.cfgMu.Lock()
+	a.cfgMu.RLock()
 	old := a.managerCfg
-	if err := a.store.SaveManager(cfg); err != nil {
-		a.cfgMu.Unlock()
-		return err
-	}
-	a.managerCfg = cfg
-	a.factory.DefaultCredentialRef = config.ManagerRuntimeCredentialRef
-	a.factory.BinaryOverride = cfg.TunnelClient.BinaryPath
-	a.registry.SetDefaultIdle(cfg.ManagedDefaults.IdleTimeoutSeconds)
-	a.cfgMu.Unlock()
+	a.cfgMu.RUnlock()
 
-	if old.General.LaunchAtStartup != cfg.General.LaunchAtStartup {
+	launchChanged := old.General.LaunchAtStartup != cfg.General.LaunchAtStartup
+	loggingChanged := managerLoggingRuntimeChanged(old.Logging, cfg.Logging)
+	if launchChanged {
 		if err := platform.SetLaunchAtStartup(ctx, cfg.General.LaunchAtStartup, a.exe); err != nil {
 			return err
 		}
 	}
-	if old.Logging != cfg.Logging {
+	if loggingChanged {
 		if err := a.log.Reconfigure(cfg.Logging); err != nil {
-			return err
+			var rollback error
+			if restoreErr := a.log.Reconfigure(old.Logging); restoreErr != nil {
+				rollback = errors.Join(rollback, fmt.Errorf("restore logging: %w", restoreErr))
+			}
+			if launchChanged {
+				if restoreErr := platform.SetLaunchAtStartup(ctx, old.General.LaunchAtStartup, a.exe); restoreErr != nil {
+					rollback = errors.Join(rollback, fmt.Errorf("restore launch-at-login: %w", restoreErr))
+				}
+			}
+			return errors.Join(err, rollback)
 		}
 	}
-	if old.ManagerTunnel != cfg.ManagerTunnel || old.TunnelClient.BinaryPath != cfg.TunnelClient.BinaryPath {
+
+	if err := a.store.SaveManager(cfg); err != nil {
+		var rollback error
+		if loggingChanged {
+			if restoreErr := a.log.Reconfigure(old.Logging); restoreErr != nil {
+				rollback = errors.Join(rollback, fmt.Errorf("restore logging: %w", restoreErr))
+			}
+		}
+		if launchChanged {
+			if restoreErr := platform.SetLaunchAtStartup(ctx, old.General.LaunchAtStartup, a.exe); restoreErr != nil {
+				rollback = errors.Join(rollback, fmt.Errorf("restore launch-at-login: %w", restoreErr))
+			}
+		}
+		return errors.Join(err, rollback)
+	}
+
+	a.cfgMu.Lock()
+	a.managerCfg = cfg
+	a.cfgMu.Unlock()
+	a.factory.SetTunnelClientConfig(cfg.TunnelClient.BinaryPath, cfg.TunnelClient.Channel)
+	a.registry.SetDefaultIdle(cfg.ManagedDefaults.IdleTimeoutSeconds)
+
+	if old.ManagerTunnel != cfg.ManagerTunnel ||
+		old.TunnelClient.BinaryPath != cfg.TunnelClient.BinaryPath ||
+		old.TunnelClient.Channel != cfg.TunnelClient.Channel {
 		go a.restartManagerTunnel()
 	}
 	a.log.Log(logging.Info, "Manager", "Configuration", "manager settings saved", nil)
@@ -425,7 +501,17 @@ func (a *App) PutSecret(ctx context.Context, ref, value string) error {
 }
 
 func (a *App) DeleteSecret(ctx context.Context, ref string) error {
-	return a.secretStore.Delete(ctx, ref)
+	if err := secrets.ValidateRef(ref); err != nil {
+		return err
+	}
+	if ref == config.ManagerRuntimeCredentialRef {
+		return errors.New("the Manager Runtime API key must be replaced from the dedicated API key setting")
+	}
+	if err := a.secretStore.Delete(ctx, ref); err != nil {
+		return err
+	}
+	a.log.Log(logging.Info, "Manager", "Secrets", "custom secret deleted", map[string]any{"ref": ref})
+	return nil
 }
 
 func (a *App) Logs() []logging.Event { return a.log.Ring().Snapshot() }
@@ -487,25 +573,31 @@ func (a *App) ExportLogs(format string) (string, error) {
 }
 
 func (a *App) CheckUpdate(ctx context.Context) (tunnelclient.Release, error) {
-	release, err := a.installer.CheckLatest(ctx)
+	a.cfgMu.RLock()
+	channel := a.managerCfg.TunnelClient.Channel
+	a.cfgMu.RUnlock()
+	release, err := a.installer.CheckChannel(ctx, channel)
 	if err == nil {
 		a.latestMu.Lock()
 		a.latest = release.TagName
 		a.latestMu.Unlock()
 		a.bus.Publish(events.Event{
 			Kind:   events.TunnelClientUpdateAvailable,
-			Fields: map[string]any{"version": release.TagName},
+			Fields: map[string]any{"version": release.TagName, "channel": channel},
 		})
 	}
 	return release, err
 }
 
 func (a *App) InstallUpdate(ctx context.Context) (tunnelclient.Active, error) {
-	active, err := a.installer.InstallLatest(ctx)
+	a.cfgMu.RLock()
+	channel := a.managerCfg.TunnelClient.Channel
+	a.cfgMu.RUnlock()
+	active, err := a.installer.InstallChannel(ctx, channel)
 	if err == nil {
 		a.bus.Publish(events.Event{
 			Kind:   events.TunnelClientUpdated,
-			Fields: map[string]any{"version": active.Version},
+			Fields: map[string]any{"version": active.Version, "channel": channel},
 		})
 	}
 	return active, err
