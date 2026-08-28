@@ -107,5 +107,9 @@ _Avoid_: per-server tunnel
 **Downstream Authentication**:
 Credentials or OAuth state used by GPT Tunnel Manager as an MCP client when a configured HTTP Downstream MCP requires authentication. This is separate from Manager-layer authentication and from the Manager Tunnel Runtime API key.
 
+**Local Manager Access Protection**:
+Optional installation-scoped capability-token protection for the loopback Manager MCP. It is enabled by default but may be disabled in native settings to intentionally permit unauthenticated local MCP access.
+_Avoid_: Manager OAuth, Auth Gateway
+
 **Portable Root**:
 The writable directory under which GPT Tunnel Manager stores configuration, runtime data, index data, managed tunnel-client versions, instance metadata, and optional logs.
