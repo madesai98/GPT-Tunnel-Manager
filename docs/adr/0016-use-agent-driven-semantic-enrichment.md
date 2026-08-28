@@ -1,0 +1,3 @@
+# Use agent-driven semantic enrichment
+
+GPT Tunnel Manager does not invoke a hidden LLM internally to enrich its Tool Catalog. Instead, the connected MCP agent performs bounded structured enrichment through the Manager MCP indexing workflow, while GPT Tunnel Manager validates, persists, embeds, and dependency-tracks that derived guidance; this keeps model reasoning visible to the connected agent and avoids adding a second general-purpose LLM credential/execution path inside the desktop application.
