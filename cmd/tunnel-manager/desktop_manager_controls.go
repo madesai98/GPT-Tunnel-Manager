@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
@@ -19,7 +20,11 @@ func managerIconButton(th *material.Theme, click *widget.Clickable, glyph string
 		size := gtx.Dp(unit.Dp(34))
 		gtx.Constraints = layout.Exact(image.Pt(size, size))
 		return click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			bg := uiSurfaceRaised
+			area := clip.Rect{Max: image.Pt(size, size)}.Push(gtx.Ops)
+			defer area.Pop()
+			pointer.CursorPointer.Add(gtx.Ops)
+
+			bg := color.NRGBA{}
 			if click.Hovered() {
 				bg = uiSurfaceHover
 			}
@@ -47,6 +52,10 @@ func managerToggle(click *widget.Clickable, enabled bool) layout.Widget {
 		height := gtx.Dp(unit.Dp(26))
 		gtx.Constraints = layout.Exact(image.Pt(width, height))
 		return click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			area := clip.Rect{Max: image.Pt(width, height)}.Push(gtx.Ops)
+			defer area.Pop()
+			pointer.CursorPointer.Add(gtx.Ops)
+
 			track := uiSurfaceHover
 			if enabled {
 				track = uiAccent
