@@ -12,6 +12,7 @@ import (
 	"gioui.org/io/pointer"
 	"gioui.org/io/system"
 	"gioui.org/layout"
+	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/unit"
@@ -60,11 +61,10 @@ func trafficLight(gtx layout.Context, button *widget.Clickable, col color.NRGBA)
 	})
 }
 
-func chromeDragRegion(bg color.NRGBA) layout.Widget {
+func chromeDragRegion(_ color.NRGBA) layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints.Min = gtx.Constraints.Max
 		dims := layout.Dimensions{Size: gtx.Constraints.Max}
-		paint.Fill(gtx.Ops, bg)
 		stack := clip.Rect{Max: dims.Size}.Push(gtx.Ops)
 		system.ActionInputOp(system.ActionMove).Add(gtx.Ops)
 		pointer.CursorGrab.Add(gtx.Ops)
@@ -81,7 +81,9 @@ func chromeRegion(gtx layout.Context, width unit.Dp, bg color.NRGBA, content lay
 	return layout.Background{}.Layout(gtx,
 		func(gtx layout.Context) layout.Dimensions {
 			gtx.Constraints.Min = gtx.Constraints.Max
+			stack := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
 			paint.Fill(gtx.Ops, bg)
+			stack.Pop()
 			return layout.Dimensions{Size: gtx.Constraints.Max}
 		},
 		content,
@@ -104,30 +106,47 @@ func (u *desktopUI) titleBar(gtx layout.Context) layout.Dimensions {
 	}
 
 	h := gtx.Dp(chromeHeight)
-	gtx.Constraints.Min.Y = h
-	gtx.Constraints.Max.Y = h
+	if h > gtx.Constraints.Max.Y {
+		h = gtx.Constraints.Max.Y
+	}
+	if h <= 0 || gtx.Constraints.Max.X <= 0 {
+		return layout.Dimensions{}
+	}
+
 	red := color.NRGBA{R: 255, G: 95, B: 87, A: 255}
 	yellow := color.NRGBA{R: 254, G: 188, B: 46, A: 255}
 	green := color.NRGBA{R: 40, G: 200, B: 64, A: 255}
 
-	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+	macro := op.Record(gtx.Ops)
+	overlay := gtx
+	overlay.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, h))
+	layout.Flex{Axis: layout.Horizontal}.Layout(overlay,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return chromeRegion(gtx, sidebarWidth, uiSidebar, func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Left: unit.Dp(10), Right: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return trafficLight(gtx, &chromeClose, red) }),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(4)}.Layout(gtx) }),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return trafficLight(gtx, &chromeMinimize, yellow) }),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(4)}.Layout(gtx) }),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return trafficLight(gtx, &chromeMaximize, green) }),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(8)}.Layout(gtx) }),
-						layout.Flexed(1, chromeDragRegion(uiSidebar)),
-					)
-				})
+			w := gtx.Dp(sidebarWidth)
+			if w > gtx.Constraints.Max.X {
+				w = gtx.Constraints.Max.X
+			}
+			gtx.Constraints = layout.Exact(image.Pt(w, h))
+			return layout.Inset{Left: unit.Dp(10), Right: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return trafficLight(gtx, &chromeClose, red) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(4)}.Layout(gtx) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return trafficLight(gtx, &chromeMinimize, yellow) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(4)}.Layout(gtx) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return trafficLight(gtx, &chromeMaximize, green) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(8)}.Layout(gtx) }),
+					layout.Flexed(1, chromeDragRegion(uiSidebar)),
+				)
 			})
 		}),
 		layout.Flexed(1, chromeDragRegion(uiCanvas)),
 	)
+	call := macro.Stop()
+	op.Defer(gtx.Ops, call)
+
+	// The native chrome is an overlay. Returning zero height lets the sidebar
+	// and page content begin at the actual top edge of the frameless window.
+	return layout.Dimensions{}
 }
 
 func (u *desktopUI) logPaneResizeHandle(gtx layout.Context) layout.Dimensions {
