@@ -427,19 +427,6 @@ func (u *desktopUI) invalidate() {
 
 func (u *desktopUI) layout(gtx layout.Context) layout.Dimensions {
 	paint.Fill(gtx.Ops, uiCanvas)
-	actions := u.deco.Update(gtx)
-	if actions&system.ActionMinimize != 0 {
-		u.hideToTray()
-	}
-	if actions&system.ActionMaximize != 0 {
-		u.perform(system.ActionMaximize)
-	}
-	if actions&system.ActionUnmaximize != 0 {
-		u.perform(system.ActionUnmaximize)
-	}
-	if actions&system.ActionClose != 0 {
-		u.requestClose()
-	}
 
 	u.mu.Lock()
 	if u.resetExitChoice {
@@ -450,12 +437,7 @@ func (u *desktopUI) layout(gtx layout.Context) layout.Dimensions {
 	u.mu.Unlock()
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-		layout.Rigid(material.Decorations(
-			u.th,
-			&u.deco,
-			system.ActionMinimize|system.ActionMaximize|system.ActionClose,
-			"GPT Tunnel Manager",
-		).Layout),
+		layout.Rigid(u.titleBar),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 				layout.Rigid(u.sidebar),
@@ -661,19 +643,7 @@ func (u *desktopUI) logPane(gtx layout.Context) layout.Dimensions {
 			return compactCard(header)(gtx)
 		}
 
-		height := gtx.Dp(unit.Dp(285))
-		if height > gtx.Constraints.Max.Y {
-			height = gtx.Constraints.Max.Y
-		}
-		gtx.Constraints.Min.Y = height
-		gtx.Constraints.Max.Y = height
-		return compactCard(func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-				layout.Rigid(header),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(10)}.Layout(gtx) }),
-				layout.Flexed(1, u.logPage),
-			)
-		})(gtx)
+		return u.expandedLogPane(gtx, header)
 	})
 }
 
