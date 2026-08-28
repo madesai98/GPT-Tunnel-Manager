@@ -25,16 +25,14 @@ var (
 	chromeMinimize widget.Clickable
 	chromeMaximize widget.Clickable
 
-	logPaneResize       gesture.Drag
-	logPaneHeight       = unit.Dp(285)
-	logPaneResizeStart  = unit.Dp(285)
-	logPaneResizeStartY float32
+	logPaneResize        gesture.Drag
+	logPaneHeight        = unit.Dp(285)
+	logPaneResizeAnchorY float32
+	logPaneMinHeight     = unit.Dp(190)
+	logPaneMaxHeight     = unit.Dp(285)
 )
 
-const (
-	chromeHeight = unit.Dp(36)
-	sidebarWidth = unit.Dp(226)
-)
+const chromeHeight = unit.Dp(36)
 
 func fillCircle(gtx layout.Context, bounds image.Rectangle, col color.NRGBA) {
 	defer clip.Ellipse(bounds).Push(gtx.Ops).Pop()
@@ -73,23 +71,6 @@ func chromeDragRegion(_ color.NRGBA) layout.Widget {
 	}
 }
 
-func chromeRegion(gtx layout.Context, width unit.Dp, bg color.NRGBA, content layout.Widget) layout.Dimensions {
-	w := gtx.Dp(width)
-	h := gtx.Dp(chromeHeight)
-	gtx.Constraints.Min = image.Pt(w, h)
-	gtx.Constraints.Max = image.Pt(w, h)
-	return layout.Background{}.Layout(gtx,
-		func(gtx layout.Context) layout.Dimensions {
-			gtx.Constraints.Min = gtx.Constraints.Max
-			stack := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
-			paint.Fill(gtx.Ops, bg)
-			stack.Pop()
-			return layout.Dimensions{Size: gtx.Constraints.Max}
-		},
-		content,
-	)
-}
-
 func (u *desktopUI) titleBar(gtx layout.Context) layout.Dimensions {
 	for chromeClose.Clicked(gtx) {
 		u.requestClose()
@@ -121,25 +102,18 @@ func (u *desktopUI) titleBar(gtx layout.Context) layout.Dimensions {
 	overlay := gtx
 	overlay.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, h))
 	layout.Flex{Axis: layout.Horizontal}.Layout(overlay,
+		layout.Flexed(1, chromeDragRegion(uiCanvas)),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			w := gtx.Dp(sidebarWidth)
-			if w > gtx.Constraints.Max.X {
-				w = gtx.Constraints.Max.X
-			}
-			gtx.Constraints = layout.Exact(image.Pt(w, h))
-			return layout.Inset{Left: unit.Dp(10), Right: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Right: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return trafficLight(gtx, &chromeClose, red) }),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(4)}.Layout(gtx) }),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return trafficLight(gtx, &chromeMinimize, yellow) }),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(4)}.Layout(gtx) }),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return trafficLight(gtx, &chromeMaximize, green) }),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(8)}.Layout(gtx) }),
-					layout.Flexed(1, chromeDragRegion(uiSidebar)),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(4)}.Layout(gtx) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return trafficLight(gtx, &chromeClose, red) }),
 				)
 			})
 		}),
-		layout.Flexed(1, chromeDragRegion(uiCanvas)),
 	)
 	call := macro.Stop()
 	op.Defer(gtx.Ops, call)
@@ -150,6 +124,10 @@ func (u *desktopUI) titleBar(gtx layout.Context) layout.Dimensions {
 }
 
 func (u *desktopUI) logPaneResizeHandle(gtx layout.Context) layout.Dimensions {
+	var (
+		latestDragY float32
+		haveDrag    bool
+	)
 	for {
 		ev, ok := logPaneResize.Update(gtx.Metric, gtx.Source, gesture.Vertical)
 		if !ok {
@@ -157,15 +135,32 @@ func (u *desktopUI) logPaneResizeHandle(gtx layout.Context) layout.Dimensions {
 		}
 		switch ev.Kind {
 		case pointer.Press:
-			logPaneResizeStart = logPaneHeight
-			logPaneResizeStartY = ev.Position.Y
+			// Pointer positions are local to the handle. Keep the press offset
+			// fixed and correct the pane height by the local error each frame;
+			// this pins the moving handle to the pointer instead of measuring
+			// against a coordinate system that moves with the pane.
+			logPaneResizeAnchorY = ev.Position.Y
 		case pointer.Drag:
-			pxPerDp := float32(gtx.Dp(unit.Dp(1)))
-			if pxPerDp < 1 {
-				pxPerDp = 1
-			}
-			deltaDp := unit.Dp((ev.Position.Y - logPaneResizeStartY) / pxPerDp)
-			logPaneHeight = logPaneResizeStart - deltaDp
+			latestDragY = ev.Position.Y
+			haveDrag = true
+		}
+	}
+
+	if haveDrag {
+		pxPerDp := gtx.Metric.PxPerDp
+		if pxPerDp <= 0 {
+			pxPerDp = 1
+		}
+		correction := unit.Dp((logPaneResizeAnchorY - latestDragY) / pxPerDp)
+		next := logPaneHeight + correction
+		if next < logPaneMinHeight {
+			next = logPaneMinHeight
+		}
+		if next > logPaneMaxHeight {
+			next = logPaneMaxHeight
+		}
+		if next != logPaneHeight {
+			logPaneHeight = next
 			u.invalidate()
 		}
 	}
@@ -189,11 +184,11 @@ func (u *desktopUI) logPaneResizeHandle(gtx layout.Context) layout.Dimensions {
 }
 
 func pxToDp(gtx layout.Context, px int) unit.Dp {
-	one := gtx.Dp(unit.Dp(1))
-	if one < 1 {
-		one = 1
+	pxPerDp := gtx.Metric.PxPerDp
+	if pxPerDp <= 0 {
+		pxPerDp = 1
 	}
-	return unit.Dp(float32(px) / float32(one))
+	return unit.Dp(float32(px) / pxPerDp)
 }
 
 func (u *desktopUI) expandedLogPane(gtx layout.Context, header layout.Widget) layout.Dimensions {
@@ -202,14 +197,17 @@ func (u *desktopUI) expandedLogPane(gtx layout.Context, header layout.Widget) la
 	if maxHeight < minHeight {
 		maxHeight = gtx.Constraints.Max.Y
 	}
+	logPaneMinHeight = pxToDp(gtx, minHeight)
+	logPaneMaxHeight = pxToDp(gtx, maxHeight)
+
 	height := gtx.Dp(logPaneHeight)
 	if height < minHeight {
 		height = minHeight
-		logPaneHeight = pxToDp(gtx, height)
+		logPaneHeight = logPaneMinHeight
 	}
 	if height > maxHeight {
 		height = maxHeight
-		logPaneHeight = pxToDp(gtx, height)
+		logPaneHeight = logPaneMaxHeight
 	}
 	gtx.Constraints.Min.Y = height
 	gtx.Constraints.Max.Y = height
