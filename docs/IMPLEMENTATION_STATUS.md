@@ -1,101 +1,44 @@
 # Implementation Status
 
-Date: 2026-08-26
+Date: 2026-08-28
 
-Status: v1.0.0 is the released baseline. The current v1.0.1 work corrects native desktop UX and Windows integration while preserving the existing runtime architecture. The v1.0.1 release is not considered complete until its branch CI, post-merge CI, and release assets are verified.
+## Current released baseline
 
-ADR 0008 is authoritative for authentication architecture and supersedes ADR 0007 plus all Shared OAuth/Auth Gateway language from earlier planning.
+`main` was frozen for v2 planning at commit `08366ffbd299177870c10a3446ab9e4dcd35a18e` (`Release v1.0.32`). The released application still uses the v1 per-server tunnel/plugin/lifecycle architecture.
 
-## Current architecture
+## V2 planning branch
 
-### Runtime and persistence
+Branch: `feature/v2-mcp-router`
 
-- Strict Portable Root beside the executable/application bundle.
-- Schema-v1 `manager.json` and `servers.json` with unknown-field rejection.
-- Stable random immutable Server IDs.
-- Atomic config writes.
-- Platform secret storage and controlled environment overrides.
-- Secret registration/redaction before retained logging.
-- Single Portable Root ownership with focus handoff to an existing instance.
+Status: **planning complete; production implementation has not started**.
 
-### Process and tunnel substrate
+The canonical v2 implementation contract is `docs/V2_IMPLEMENTATION_PLAN.md`. `CONTEXT.md` and ADRs 0009 onward describe the accepted v2 architecture and supersede conflicting v1 topology assumptions where stated.
 
-- Direct executable + argv process launching; no shell command execution.
-- Unix process-group termination and Windows process-tree termination.
-- Foreground official `tunnel-client` ownership.
-- Dynamic health URL file and `/readyz` readiness.
-- Stdio, Managed HTTP, and External HTTP transports.
-- Exact OS/architecture release selection.
-- Required SHA-256 release digest verification.
-- Compatibility probe before version promotion.
-- Atomic active-version selection and rollback to a previous installed version.
+The v2 direction is:
 
-### Lifecycle
+- one fixed 19-tool Manager MCP;
+- direct downstream MCP clients for Stdio, Managed HTTP, and External HTTP;
+- optional Manager Secure MCP Tunnel only;
+- mandatory generation-based semantic catalog/index;
+- agent-driven tool enrichment plus capability reconciliation;
+- non-blocking Ambiguity Reviews and persistent Routing Preferences/Profiles;
+- ten ToolAnnotation-preserving execution classes;
+- generation-bound authenticated Execution Handles;
+- router-native Managed lifecycle/use leases;
+- downstream OAuth/static authentication as a separate client credential boundary;
+- optional local Manager capability protection enabled by default;
+- modern stateless plus legacy stateful upstream MCP compatibility where required;
+- bridging of tool-required Tasks, resource followups, MRTR, cancellation, and legacy callbacks;
+- strict v2-native configuration with no v1-to-v2 conversion code.
 
-- Desired and Observed State separation.
-- Always On, Managed, Manual, and Disabled policy enforcement.
-- Serialized idempotent starts/restarts/shutdowns.
-- Crash detection and bounded jittered retry/backoff.
-- Stable-run backoff reset.
-- Managed idle shutdown driven only by explicitly compatible structured tunnel-client telemetry.
-- Always On startup and coordinated application shutdown.
+## Clean v2 break
 
-### Manager MCP and ChatGPT lifecycle
+V2 intentionally does not preserve compatibility with v1 configuration or routing data. The implementation should initialize clean v2 state rather than carrying v1 compatibility structs, aliases, migration journals, or conversion logic. Existing v1 state may be moved aside as opaque discardable legacy data during the one major-version cutover, but it is not parsed or converted.
 
-- Loopback Manager MCP exposed through its own Secure MCP Tunnel.
-- Exactly four tools: `get_status`, `start`, `restart`, `shutdown`.
-- Managed-only lifecycle mutation gate.
-- Server-ID-only mutation schema with strict additional-property rejection.
-- Browser-Origin rejection for the localhost Manager MCP.
-- Generic immutable Lifecycle Marker.
-- Generic separately installed Lifecycle Skill.
-- Compiled Lifecycle Skill content for packaged export.
+## Planning-only repository changes
 
-### Desktop and local UX
+The current feature branch is expected to differ from `main` only in planning/documentation artifacts until the user explicitly authorizes implementation. No production code should be treated as implemented merely because an ADR or plan describes it.
 
-- Native Gio is the only management UI; there is no management Web UI.
-- System-tray-first integration: minimize/close-to-tray removes the native window from the taskbar while the process remains active.
-- Start-minimized starts directly in the tray without requiring a visible management window.
-- Tray/second-instance Open Manager restores a native Gio window.
-- The Servers page begins with a built-in, non-deletable `Manager MCP` row that is not persisted in `servers.json`.
-- Server list/status/lifecycle controls for downstream entries.
-- Server editor for all three transports, environment values, and custom secret references.
-- Dedicated masked value-only `OpenAI Runtime API Key` field backed by the fixed internal reference `secret://openai/runtime/default`.
-- Downstream tunnel runtimes use the Manager Runtime API key by default.
-- Windows secret storage uses native Current User DPAPI rather than PowerShell cryptography access.
-- Tunnel-client check/install/rollback controls.
-- Structured live logs with search, level filter, clear, text export, and JSONL export.
-- Launch-at-login, start-hidden-in-tray, close behavior, exit-confirmation, logging, and appearance settings.
-- App-controlled native title-bar close/minimize behavior and coordinated explicit exit confirmation.
-- Runtime disk-log reconfiguration and bounded rotation.
-- Windows release GUI binaries use the GUI subsystem so the desktop launch does not open a console window.
+## Implementation entry gate
 
-### Authentication architecture
-
-- No Tunnel Manager OAuth/Auth Gateway.
-- No additional Manager plugin authentication.
-- No additional per-server tunnel authentication layer.
-- Each MCP server owns its own authentication needs.
-- OpenAI Runtime API keys are used solely by `tunnel-client` for Secure MCP Tunnel control-plane access.
-
-## Verification gates for v1.0.1
-
-The release remains gated on:
-
-- `go mod tidy` producing no diff to committed `go.mod` / `go.sum`.
-- `go test ./...`.
-- `go vet ./...`.
-- Native Gio desktop builds on Ubuntu, Windows, and macOS.
-- Windows native DPAPI round-trip test.
-- Headless-compatible builds for Windows/Linux/macOS on amd64 and arm64.
-- Post-merge CI on `main`.
-- Successful native release builds for Windows AMD64/ARM64, Linux AMD64/ARM64, and macOS AMD64/ARM64.
-- Release changelog, source archives, and `SHA256SUMS.txt` verification.
-
-## v1.0.0 baseline verification
-
-The earlier v1.0.0 implementation passed the repository CI matrix before the native-only UX corrections. Those historical results remain baseline evidence only and do not substitute for v1.0.1 validation.
-
-## Deliberate external acceptance boundary
-
-Automated CI does not create or consume real OpenAI Secure MCP Tunnels because the repository contains no production Runtime API key or permanent tunnel resources. Real ChatGPT Developer Plugin discovery and end-to-end tunnel traffic are release/operator acceptance tests using suitable credentials and tunnels.
+Production implementation may begin only after explicit user confirmation. The first implementation phase must re-run/freeze the v1.0.32 baseline and then perform the MCP compatibility spike in `docs/V2_IMPLEMENTATION_PLAN.md` before deeper router/index work.
