@@ -73,8 +73,14 @@ The deterministic identity of routing-relevant configuration and keyed routing-s
 **Semantic Enrichment**:
 Bounded structured Derived Router Guidance produced by the connected agent from authoritative tool records and selected semantic neighbors.
 
+**Capability Reconciliation**:
+A second-stage enrichment pass that normalizes overlapping or near-synonymous capability paths across independently enriched tool batches. It is primarily automatic taxonomy cleanup; only ambiguities that materially affect tool choice become Ambiguity Reviews.
+
 **Routing Preference**:
-A persisted user-authored ranking rule that prefers, avoids, or conditionally chooses one Server Entry or tool set over another. Routing Preferences are a separate overlay from Authoritative Source Contracts and Semantic Enrichment; they may affect discovery ranking and selection explanations but can never change schemas, permissions, executor classes, or authorization.
+A persisted user-authored ranking rule that prefers, avoids, or conditionally chooses one Server Entry or tool set over another. Routing Preferences are a separate overlay from Authoritative Source Contracts and Semantic Enrichment; they may affect discovery ranking and selection explanations but are guidance rather than access-control rules and can never change schemas, permissions, executor classes, authorization, or execution safety.
+
+**Preference Revision**:
+A monotonic revision advanced by Routing Preference mutations. It is separate from the Routing State Hash and Index Generation; preference changes take effect immediately in ranking and cache keys without requiring semantic reindexing.
 
 **Routing Profile**:
 A named scope containing Routing Preferences for a particular project, workflow, or context. A Global layer applies everywhere; an explicitly active Routing Profile overrides Global rules where more specific profile rules apply. Agents may select a profile when they know the current context, but GPT Tunnel Manager does not silently infer project identity when uncertain.
