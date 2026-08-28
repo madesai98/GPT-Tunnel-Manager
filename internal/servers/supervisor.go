@@ -94,7 +94,17 @@ func (s *Supervisor) snapshotLocked() Snapshot {
 	if s.activityTracking {
 		tracking = "tunnel_client_telemetry"
 	}
-	idle := s.entry.Mode == config.ModeManaged && s.entry.IdleTimeout(s.defaultIdle) > 0 && s.activityTracking
+	idleDuration := s.entry.IdleTimeout(s.defaultIdle)
+	idle := s.entry.Mode == config.ModeManaged && idleDuration > 0 && s.activityTracking
+	idleSeconds := 0
+	var idleDeadline *time.Time
+	if idle {
+		idleSeconds = int(idleDuration / time.Second)
+		if s.lastActivity != nil {
+			deadline := s.lastActivity.Add(idleDuration)
+			idleDeadline = &deadline
+		}
+	}
 	return Snapshot{
 		ServerID:            s.entry.ID,
 		Name:                s.entry.Name,
@@ -106,6 +116,8 @@ func (s *Supervisor) snapshotLocked() Snapshot {
 		Ready:               s.observed == lifecycle.Ready,
 		TunnelReady:         s.observed == lifecycle.Ready,
 		IdleShutdownEnabled: idle,
+		IdleTimeoutSeconds:  idleSeconds,
+		IdleDeadlineAt:      idleDeadline,
 		ActivityTracking:    tracking,
 		LastActivityAt:      cloneTime(s.lastActivity),
 		RetryAfter:          cloneTime(s.retryAfter),
