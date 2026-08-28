@@ -9,7 +9,7 @@ The desktop application that owns Server Entries, the Manager MCP, downstream MC
 _Avoid_: Tunnel Manager when the shorter name could be confused with a tunnel runtime
 
 **Manager MCP**:
-The single upstream MCP surface exposed by GPT Tunnel Manager to ChatGPT or another MCP-capable agent harness. It provides indexing, discovery, tool-detail, fixed permission-class execution, and user-routing-preference behavior.
+The single upstream MCP surface exposed by GPT Tunnel Manager to ChatGPT or another MCP-capable agent harness. It exposes a fixed 19-tool surface covering indexing, discovery, tool detail, ten permission-class execution tools, and routing-preference management.
 _Avoid_: Manager Developer Plugin, lifecycle MCP
 
 **Downstream MCP**:
@@ -77,11 +77,14 @@ Bounded structured Derived Router Guidance produced by the connected agent from 
 A persisted user-authored ranking rule that prefers, avoids, or conditionally chooses one Server Entry or tool set over another. Routing Preferences are a separate overlay from Authoritative Source Contracts and Semantic Enrichment; they may affect discovery ranking and selection explanations but can never change schemas, permissions, executor classes, or authorization.
 
 **Routing Profile**:
-A named scope containing Routing Preferences for a particular project, workflow, or context. A global preference layer may apply everywhere, while a more specific active Routing Profile may override it when the rules are compatible.
+A named scope containing Routing Preferences for a particular project, workflow, or context. A Global layer applies everywhere; an explicitly active Routing Profile overrides Global rules where more specific profile rules apply. Agents may select a profile when they know the current context, but GPT Tunnel Manager does not silently infer project identity when uncertain.
 _Avoid_: automatic project identity
 
 **Ambiguity Review**:
-An optional user-feedback step raised when overlapping tools cannot be ranked confidently from authoritative metadata and semantic enrichment alone. The connected agent presents the competing choices with relevant pros, cons, and conditional use cases, then records the user's decision as a Routing Preference or records that no preference should be applied.
+An optional, non-blocking user-feedback step raised when overlapping tools cannot be ranked confidently from authoritative metadata and semantic enrichment alone. The connected agent presents the competing choices with source-grounded pros, cons, and conditional use cases, then records the user's decision as a Routing Preference or records that neutral behavior should remain. Unresolved reviews are marked `needs_user_feedback` and do not block an otherwise valid index generation.
+
+**Preference Review State**:
+A Routing Preference whose referenced tools or assumptions no longer match current catalog state is marked `needs_review` and is not silently transferred to a replacement tool. Conflicts at the same scope and specificity likewise require review.
 
 **Embedding Provider**:
 The separately configured service or compatible local endpoint used to generate Tool Catalog and search-query embeddings. Its credentials are distinct from the OpenAI Runtime API key used by the Manager Tunnel.
