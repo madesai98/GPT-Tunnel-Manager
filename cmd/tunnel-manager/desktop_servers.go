@@ -142,42 +142,37 @@ func (u *desktopUI) managerRow(gtx layout.Context, snapshot coreapp.ManagerSnaps
 		tunnelID = "not configured"
 	}
 
-	serverReady := snapshot.MCPURL != ""
-	serverState := "stopped"
-	if serverReady {
-		serverState = "ready"
+	state := snapshot.State
+	if state == "" {
+		state = "starting"
 	}
-	serverBg, serverFg, serverText := stateColors(serverState, serverReady)
-
-	tunnelState := snapshot.State
-	if tunnelState == "" {
-		tunnelState = "starting"
-	}
-	tunnelReady := snapshot.Ready
+	ready := snapshot.Ready
 	if !snapshot.Enabled {
-		tunnelState = "stopped"
-		tunnelReady = false
+		state = "stopped"
+		ready = false
 	}
-	tunnelBg, tunnelFg, tunnelText := stateColors(tunnelState, tunnelReady)
+	statusBg, statusFg, statusText := stateColors(state, ready)
 
 	return layout.Inset{Bottom: unit.Dp(10)}.Layout(gtx, compactCard(func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-					layout.Rigid(sectionTitle(u.th, "Manager MCP")),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(12)}.Layout(gtx) }),
-					layout.Rigid(pill(u.th, "Server: "+serverText, serverBg, serverFg)),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
-					layout.Rigid(pill(u.th, "Tunnel: "+tunnelText, tunnelBg, tunnelFg)),
-					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions { return layout.Spacer{}.Layout(gtx) }),
-					layout.Rigid(managerIconButton(u.th, &actions.restart, "↻")),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(10)}.Layout(gtx) }),
-					layout.Rigid(managerToggle(&actions.toggle, snapshot.Enabled)),
+		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+							layout.Rigid(sectionTitle(u.th, "Manager MCP")),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(12)}.Layout(gtx) }),
+							layout.Rigid(pill(u.th, statusText, statusBg, statusFg)),
+						)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Top: unit.Dp(3)}.Layout(gtx, faintCaption(u.th, tunnelID))
+					}),
 				)
 			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(3)}.Layout(gtx, faintCaption(u.th, tunnelID))
-			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(14)}.Layout(gtx) }),
+			layout.Rigid(managerIconButton(u.th, &actions.restart, "↻")),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(10)}.Layout(gtx) }),
+			layout.Rigid(managerToggle(&actions.toggle, snapshot.Enabled)),
 		)
 	}))
 }
