@@ -1,6 +1,9 @@
 package app
 
 import (
+	"context"
+	"time"
+
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/config"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/logging"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/servers"
@@ -9,6 +12,7 @@ import (
 type ManagerSnapshot struct {
 	State     string
 	Ready     bool
+	Enabled   bool
 	Error     string
 	HealthURL string
 	TunnelID  string
@@ -31,6 +35,7 @@ func (a *App) ManagerSnapshot() ManagerSnapshot {
 	return ManagerSnapshot{
 		State:     status.State,
 		Ready:     status.Ready,
+		Enabled:   status.State != "stopped",
 		Error:     status.Error,
 		HealthURL: status.HealthURL,
 		TunnelID:  tunnelID,
@@ -40,6 +45,30 @@ func (a *App) ManagerSnapshot() ManagerSnapshot {
 
 func (a *App) RestartManagerTunnel() {
 	go a.restartManagerTunnel()
+}
+
+func (a *App) SetManagerTunnelEnabled(enabled bool) {
+	if enabled {
+		go a.restartManagerTunnel()
+		return
+	}
+
+	go func() {
+		a.mgrMu.Lock()
+		runtime := a.mgrRuntime
+		a.mgrRuntime = nil
+		a.mgrGen++
+		a.mgrStatus = managerStatus{State: "stopped"}
+		a.mgrMu.Unlock()
+		a.mgrBackoff.Reset()
+
+		if runtime != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			_ = runtime.Stop(ctx)
+			cancel()
+		}
+		a.log.Log(logging.Info, "Manager", "Tunnel", "manager tunnel disabled", nil)
+	}()
 }
 
 func (a *App) LogSelfUpdate(message string, fields map[string]any) {
