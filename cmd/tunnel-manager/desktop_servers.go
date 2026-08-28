@@ -262,7 +262,7 @@ func (u *desktopUI) serverRow(gtx layout.Context, entry config.ServerEntry, snap
 
 	return layout.Inset{Bottom: unit.Dp(10)}.Layout(gtx, compactCard(func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
@@ -278,36 +278,42 @@ func (u *desktopUI) serverRow(gtx layout.Context, entry config.ServerEntry, snap
 					}),
 				)
 			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(14)}.Layout(gtx) }),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if !showStart {
-					return layout.Dimensions{}
-				}
-				return managerIconButton(u.th, &actions.start, "▶")(gtx)
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return layout.Center.Layout(gtx, idleCountdown(u.th, snapshot))
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if !showStop {
-					return layout.Dimensions{}
-				}
-				return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, managerIconButton(u.th, &actions.stop, "■"))
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if !showStart {
+							return layout.Dimensions{}
+						}
+						return managerIconButton(u.th, &actions.start, "▶")(gtx)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if !showStop {
+							return layout.Dimensions{}
+						}
+						return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, managerIconButton(u.th, &actions.stop, "■"))
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if !showRestart {
+							return layout.Dimensions{}
+						}
+						return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, managerIconButton(u.th, &actions.restart, "↻"))
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, managerIconButton(u.th, &actions.edit, "✎"))
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, copyIconButton(u.th, &actions.marker))
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, dangerIconButton(u.th, &actions.delete, "×"))
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(10)}.Layout(gtx) }),
+					layout.Rigid(managerToggle(&actions.toggle, entry.Enabled)),
+				)
 			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if !showRestart {
-					return layout.Dimensions{}
-				}
-				return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, managerIconButton(u.th, &actions.restart, "↻"))
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, managerIconButton(u.th, &actions.edit, "✎"))
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, managerIconButton(u.th, &actions.marker, "⧉"))
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, dangerIconButton(u.th, &actions.delete, "×"))
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(10)}.Layout(gtx) }),
-			layout.Rigid(managerToggle(&actions.toggle, entry.Enabled)),
 		)
 	}))
 }
