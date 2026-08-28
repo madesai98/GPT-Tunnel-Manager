@@ -15,7 +15,7 @@ import (
 	"gioui.org/widget/material"
 )
 
-func managerIconButton(th *material.Theme, click *widget.Clickable, glyph string) layout.Widget {
+func compactIconButton(th *material.Theme, click *widget.Clickable, glyph string, hoverBg, fg color.NRGBA) layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
 		size := gtx.Dp(unit.Dp(34))
 		gtx.Constraints = layout.Exact(image.Pt(size, size))
@@ -26,7 +26,7 @@ func managerIconButton(th *material.Theme, click *widget.Clickable, glyph string
 
 			bg := color.NRGBA{}
 			if click.Hovered() {
-				bg = uiSurfaceHover
+				bg = hoverBg
 			}
 			return layout.Background{}.Layout(gtx,
 				func(gtx layout.Context) layout.Dimensions {
@@ -36,7 +36,7 @@ func managerIconButton(th *material.Theme, click *widget.Clickable, glyph string
 				func(gtx layout.Context) layout.Dimensions {
 					return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 						label := material.Body1(th, glyph)
-						label.Color = uiText
+						label.Color = fg
 						label.TextSize = unit.Sp(21)
 						return label.Layout(gtx)
 					})
@@ -44,6 +44,14 @@ func managerIconButton(th *material.Theme, click *widget.Clickable, glyph string
 			)
 		})
 	}
+}
+
+func managerIconButton(th *material.Theme, click *widget.Clickable, glyph string) layout.Widget {
+	return compactIconButton(th, click, glyph, uiSurfaceHover, uiText)
+}
+
+func dangerIconButton(th *material.Theme, click *widget.Clickable, glyph string) layout.Widget {
+	return compactIconButton(th, click, glyph, uiDangerSoft, uiDanger)
 }
 
 func managerToggle(click *widget.Clickable, enabled bool) layout.Widget {
