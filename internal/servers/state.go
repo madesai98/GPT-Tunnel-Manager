@@ -35,6 +35,8 @@ type Snapshot struct {
 	Ready               bool                    `json:"ready"`
 	TunnelReady         bool                    `json:"tunnel_ready"`
 	IdleShutdownEnabled bool                    `json:"idle_shutdown_enabled"`
+	IdleTimeoutSeconds  int                     `json:"idle_timeout_seconds,omitempty"`
+	IdleDeadlineAt      *time.Time              `json:"idle_deadline_at,omitempty"`
 	ActivityTracking    string                  `json:"activity_tracking"`
 	LastActivityAt      *time.Time              `json:"last_activity_at,omitempty"`
 	RetryAfter          *time.Time              `json:"retry_after,omitempty"`
