@@ -34,10 +34,18 @@ var (
 )
 
 func fillRounded(gtx layout.Context, col color.NRGBA, radius unit.Dp) layout.Dimensions {
+	size := gtx.Constraints.Min
 	r := gtx.Dp(radius)
-	defer clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Min}, r).Push(gtx.Ops).Pop()
+	maxRadius := min(size.X, size.Y) / 2
+	if r > maxRadius {
+		r = maxRadius
+	}
+	if r < 0 {
+		r = 0
+	}
+	defer clip.UniformRRect(image.Rectangle{Max: size}, r).Push(gtx.Ops).Pop()
 	paint.Fill(gtx.Ops, col)
-	return layout.Dimensions{Size: gtx.Constraints.Min}
+	return layout.Dimensions{Size: size}
 }
 
 func surface(bg color.NRGBA, radius unit.Dp, inset layout.Inset, content layout.Widget) layout.Widget {
