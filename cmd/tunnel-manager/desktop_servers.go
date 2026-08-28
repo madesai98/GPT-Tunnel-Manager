@@ -26,6 +26,7 @@ type rowActions struct {
 	start   widget.Clickable
 	stop    widget.Clickable
 	restart widget.Clickable
+	toggle  widget.Clickable
 	edit    widget.Clickable
 	marker  widget.Clickable
 	delete  widget.Clickable
@@ -126,43 +127,56 @@ func (u *desktopUI) managerRow(gtx layout.Context, snapshot coreapp.ManagerSnaps
 		u.core.RestartManagerTunnel()
 		u.setMessage("Manager tunnel restart requested.")
 	}
-	for actions.edit.Clicked(gtx) {
-		u.page = "settings"
-		u.loadSettings()
+	for actions.toggle.Clicked(gtx) {
+		enabled := !snapshot.Enabled
+		u.core.SetManagerTunnelEnabled(enabled)
+		if enabled {
+			u.setMessage("Manager tunnel enabled.")
+		} else {
+			u.setMessage("Manager tunnel disabled.")
+		}
 	}
 
-	state := snapshot.State
-	if state == "" {
-		state = "starting"
-	}
 	tunnelID := snapshot.TunnelID
 	if tunnelID == "" {
 		tunnelID = "not configured"
 	}
-	statusBg, statusFg, statusText := stateColors(state, snapshot.Ready)
-	detail := fmt.Sprintf("System runtime · %s · tunnel %s", state, tunnelID)
-	if snapshot.Error != "" {
-		detail += " · " + snapshot.Error
+
+	serverReady := snapshot.MCPURL != ""
+	serverState := "stopped"
+	if serverReady {
+		serverState = "ready"
 	}
+	serverBg, serverFg, serverText := stateColors(serverState, serverReady)
+
+	tunnelState := snapshot.State
+	if tunnelState == "" {
+		tunnelState = "starting"
+	}
+	tunnelReady := snapshot.Ready
+	if !snapshot.Enabled {
+		tunnelState = "stopped"
+		tunnelReady = false
+	}
+	tunnelBg, tunnelFg, tunnelText := stateColors(tunnelState, tunnelReady)
 
 	return layout.Inset{Bottom: unit.Dp(10)}.Layout(gtx, compactCard(func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-					layout.Flexed(1, sectionTitle(u.th, "Manager MCP")),
-					layout.Rigid(pill(u.th, statusText, statusBg, statusFg)),
+					layout.Rigid(sectionTitle(u.th, "Manager MCP")),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(12)}.Layout(gtx) }),
+					layout.Rigid(pill(u.th, "Server: "+serverText, serverBg, serverFg)),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+					layout.Rigid(pill(u.th, "Tunnel: "+tunnelText, tunnelBg, tunnelFg)),
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions { return layout.Spacer{}.Layout(gtx) }),
+					layout.Rigid(managerIconButton(u.th, &actions.restart, "↻")),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(10)}.Layout(gtx) }),
+					layout.Rigid(managerToggle(&actions.toggle, snapshot.Enabled)),
 				)
 			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(5)}.Layout(gtx, mutedCaption(u.th, detail)) }),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(3)}.Layout(gtx, faintCaption(u.th, snapshot.MCPURL+" · built-in runtime")) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{}.Layout(gtx,
-						layout.Rigid(secondaryButton(u.th, &actions.restart, "Restart Tunnel")),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
-						layout.Rigid(secondaryButton(u.th, &actions.edit, "Settings")),
-					)
-				})
+				return layout.Inset{Top: unit.Dp(3)}.Layout(gtx, faintCaption(u.th, tunnelID))
 			}),
 		)
 	}))
