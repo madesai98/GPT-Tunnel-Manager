@@ -1,0 +1,3 @@
+# Make local Manager access protection optional
+
+GPT Tunnel Manager provides optional capability-token protection for its loopback Manager MCP because v2 can exercise authenticated downstream tools and is materially more powerful than the v1 lifecycle endpoint. Protection is enabled by default and uses an installation-scoped secret, but the native settings UI allows the user to disable it and intentionally run the loopback Manager MCP unauthenticated; browser-Origin rejection remains enforced in either mode.
