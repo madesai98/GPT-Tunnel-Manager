@@ -10,7 +10,7 @@ Date: 2026-08-29
 
 Branch: `feature/v2-mcp-router`
 
-Status: **implementation in progress; Phases 1–12 complete, Phase 13 next**.
+Status: **v2 implementation complete; Phases 1–13 complete and the Definition of Done is satisfied on the feature branch. Release/merge remains a separate explicit action**.
 
 The canonical v2 implementation contract is `docs/V2_IMPLEMENTATION_PLAN.md`. `CONTEXT.md` and ADRs 0009 onward describe the accepted v2 architecture and supersede conflicting v1 topology assumptions where stated.
 
@@ -345,7 +345,32 @@ A recursive feature-branch tree audit after the removal found no active `interna
 
 Phase 12 implementation CI run `33277299441` completed successfully on `adbfde16f84c6ee29b2d6abc29df0f3aa4e5e6f3`: committed module-graph verification produced zero diff, `go test ./...` passed, the dedicated Phase 7 discovery quality gate remained green, `go vet ./...` passed, the retrieval-scale benchmark step passed, native Linux/Windows/macOS GUI builds passed, Windows process/DPAPI checks passed, and all six headless `CGO_ENABLED=0` cross-build targets passed.
 
-Phase 12 exit gate is satisfied: active downstream routing/lifecycle code has no dependency on per-server Secure Tunnels, lifecycle markers, lifecycle skills, the old registry/runtime topology, or v1 configuration; `internal/tunnelclient` remains solely for the one optional Manager Secure MCP Tunnel. Phase 13 — full verification and release hardening — is next.
+The Phase 12 status-documentation head `a9d9b64d6465425be95ace26e8c7b2b479e83623` was then verified by a second fully green CI run `33277433491` before Phase 13 hardening began.
+
+Phase 12 exit gate is satisfied: active downstream routing/lifecycle code has no dependency on per-server Secure Tunnels, lifecycle markers, lifecycle skills, the old registry/runtime topology, or v1 configuration; `internal/tunnelclient` remains solely for the one optional Manager Secure MCP Tunnel.
+
+### Phase 13 — full verification and release hardening
+
+Complete through implementation commit `9d4c60f11ce87ee4f60b667eb3b0ebef8584eb82`.
+
+Phase 13 closes the remaining verification, secure-exposure, release, and clean-break gaps while reusing the substantive protocol/index/routing/lifecycle suites established in Phases 1–12:
+
+- fixed the optional Manager Secure MCP Tunnel to interoperate with default-enabled Local Manager Access Protection: the Manager capability is loaded from the secret store, registered with the central redactor, and supplied to `tunnel-client` as an environment-backed MCP `Authorization` header; the capability value never appears in argv or persisted configuration, and CR/LF injection is rejected at the tunnel-client runtime boundary;
+- made Manager Tunnel reconfiguration follow the actual local Manager boundary by restarting the tunnel when the loopback Manager port or Local Manager Access Protection setting changes, in addition to existing tunnel ID/runtime-client changes;
+- hardened application self-update for the v1-to-v2 clean break across both ZIP and tar.gz release formats: `config/`, `data/`, and `tools/` remain protected user-data roots, v2 archives containing the obsolete top-level `lifecycle-skill/` package are rejected, and generated Windows/Unix updater scripts explicitly remove that old packaged directory from an existing installation before copying staged v2 application files;
+- added focused self-update tests for ZIP and tar.gz executable staging/renaming, protected data paths, path traversal rejection, obsolete lifecycle-bundle rejection, and Windows/Unix updater-script clean-break policy;
+- rewrote the public README around the v2 fixed-Manager/direct-downstream architecture, authentication boundaries, indexing/routing workflow, single optional Manager Tunnel, six-target verification, and clean self-update behavior, removing the old per-server tunnel/plugin/marker/lifecycle-skill setup instructions;
+- hardened the release workflow around v2: it now has a verification job before packaging, runs module-graph/test/search-quality/self-update-clean-break/vet gates, packages no lifecycle-skill bundle, fails if an obsolete bundle reaches staging, and generates v2-native release highlights instead of the deleted four-tool/per-server-tunnel architecture;
+- promoted `go test -race ./...` to a required CI gate for the whole repository;
+- expanded native desktop verification from three host-default builds to six explicit native release targets on matching runners: Linux amd64, Linux arm64, Windows amd64, Windows arm64, macOS amd64, and macOS arm64;
+- retained the six `CGO_ENABLED=0` headless cross-build targets as an independent portability gate;
+- retained the committed Section 18 search-quality gate and exact-cosine/BM25 retrieval-scale benchmarks in the final matrix.
+
+The earlier focused and integration suites remain the verification basis for the rest of the Phase 13 checklist: real Stdio/Managed HTTP/External HTTP downstream MCP flows and OAuth/static credential boundaries from Phase 3; crash/restart/corruption and atomic-generation behavior from Phase 4–6; preference conflict/review semantics from Phase 6–7; modern/legacy Manager protocol, task/resource/callback continuation, local capability/Origin enforcement, and end-to-end index-to-executor workflow from Phase 10; and router-native lifecycle/failure/cancellation coverage from Phases 8–9. Phase 13 did not replace these mature tests with duplicate shallow fixtures.
+
+Phase 13 hardening CI run `33278481021` completed successfully on `9d4c60f11ce87ee4f60b667eb3b0ebef8584eb82`. The committed module graph produced zero diff; `go test ./...`, `go test -race ./...`, the dedicated Phase 7 search-quality gate, `go vet ./...`, and the retrieval-scale benchmarks all passed. Native builds passed on Linux amd64/arm64, Windows amd64/arm64, and macOS amd64/arm64; both Windows native targets also passed the no-console child-process and DPAPI checks. All six headless `CGO_ENABLED=0` cross-build targets passed.
+
+Phase 13 exit gate and the v2 Definition of Done are satisfied on `feature/v2-mcp-router`: no unresolved compatibility blocker remains in the accepted v2 contract, the optional Manager Tunnel now respects default local capability protection without exposing the capability through argv, the release/self-update path enforces the v2 clean break while preserving user data, the full repository is race-clean under CI, and all six native release architectures build successfully. No release, tag, merge, or change to `main` is part of this completion checkpoint.
 
 ## Clean v2 break
 

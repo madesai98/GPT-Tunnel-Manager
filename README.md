@@ -36,7 +36,7 @@ The desktop application provides:
 - Structured log filtering, clearing, text/JSONL export, and secret redaction.
 - `tunnel-client` install/update/rollback controls for the Manager Tunnel only.
 - Launch-at-login, start-hidden-in-tray, close behavior, explicit exit confirmation, disk logging, and appearance settings.
-- Application self-update using signed-by-release SHA-256 verification and a separate updater terminal/process.
+- Application self-update using SHA-256 release-digest verification and a separate updater terminal/process.
 
 Minimize and configured close-to-tray behavior remove the native window while the Manager process and eligible downstream runtimes continue running. Explicit Exit shuts down Manager-owned runtimes and removes the tray icon.
 

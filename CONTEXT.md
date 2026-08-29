@@ -23,10 +23,10 @@ The persisted GPT Tunnel Manager identity and configuration for one Downstream M
 The immutable generated `srv_...` identifier for one Server Entry. It is an internal stable identity for configuration, indexing, lifecycle, diagnostics, and routing dependencies.
 
 **Server Mode**:
-The lifecycle policy of a Server Entry: Always On, Managed, or Manual.
+The lifecycle policy of a Server Entry: Always On, Managed, Manual, or Disabled.
 
 **Always On**:
-A Server Mode in which an enabled Downstream MCP is kept running while GPT Tunnel Manager is active.
+A Server Mode in which the Downstream MCP is kept running while GPT Tunnel Manager is active.
 
 **Managed**:
 A Server Mode in which GPT Tunnel Manager may automatically start the Downstream MCP for routed work and later stop it after its idle policy permits.
@@ -34,8 +34,8 @@ A Server Mode in which GPT Tunnel Manager may automatically start the Downstream
 **Manual**:
 A Server Mode in which lifecycle start/stop control remains exclusively with the native UI.
 
-**Enabled State**:
-Whether a Server Entry participates in runtime and routing policy. Disabled entries are excluded from committed routing generations.
+**Disabled**:
+A Server Mode that excludes the Server Entry from runtime acquisition and committed routing membership until the user changes its mode.
 
 **Desired State**:
 Whether GPT Tunnel Manager currently intends an owned Downstream MCP runtime to be running or stopped.
