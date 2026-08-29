@@ -93,6 +93,9 @@ type Session struct {
 	notifyOnce              *sync.Once
 	onToolChanged           func(string)
 
+	callbackState *callbackState
+	callbackMu    sync.Mutex
+
 	ownedProcess *gtmprocess.Managed
 	processDone  <-chan struct{}
 	shutdown     time.Duration
@@ -111,6 +114,7 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 
 	changed := &atomic.Bool{}
 	notifyOnce := &sync.Once{}
+	callbacks := &callbackState{}
 	markChanged := func() {
 		changed.Store(true)
 		notifyOnce.Do(func() {
@@ -123,13 +127,12 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 		opts := cloneClientOptions(f.clientOptions)
 		previous := opts.ToolListChangedHandler
 		opts.ToolListChangedHandler = func(callbackCtx context.Context, req *mcp.ToolListChangedRequest) {
-			// The notification itself is authoritative enough to stale the live
-			// contract. Do not wait for a later routed call before notifying the
-			// routing/catalog boundary.
 			markChanged()
 			safeToolListChangedHandler(previous, callbackCtx, req)
 		}
+		prepareCallbackBridge(opts, callbacks)
 		client := mcp.NewClient(&mcp.Implementation{Name: "gpt-tunnel-manager", Version: "v2"}, opts)
+		installRootCallbackBridge(client, callbacks)
 		if err := registerTaskMethods(client); err != nil {
 			return nil, err
 		}
@@ -220,6 +223,7 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 		toolContractChanged:     changed,
 		notifyOnce:              notifyOnce,
 		onToolChanged:           f.onToolChanged,
+		callbackState:           callbacks,
 		ownedProcess:            owned,
 		processDone:             processDone,
 		shutdown:                server.ShutdownTimeout(),
@@ -275,6 +279,21 @@ func (s *Session) CallTool(ctx context.Context, params *mcp.CallToolParams) (*mc
 			return nil, err
 		}
 	}
+
+	// A legacy downstream session can issue server->client callbacks while a
+	// tools/call is in flight. Serialize calls for this one downstream session
+	// and install exactly one upstream target for the duration so callbacks can
+	// never cross-talk between concurrent routed requests.
+	s.callbackMu.Lock()
+	if s.callbackState != nil {
+		s.callbackState.set(legacyCallbackTargetFromContext(ctx))
+	}
+	defer func() {
+		if s.callbackState != nil {
+			s.callbackState.set(nil)
+		}
+		s.callbackMu.Unlock()
+	}()
 	return s.sdk.CallTool(ctx, params)
 }
 
