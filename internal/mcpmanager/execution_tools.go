@@ -6,6 +6,7 @@ import (
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/buildinfo"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/discovery"
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/downstream"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/executionrouter"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -37,9 +38,8 @@ var executorDefinitions = []executorDefinition{
 }
 
 // NewRouterServer composes the Phase 7 discovery/detail tools with the Phase 8
-// permission-preserving execution tools. Later phases compose the remaining
-// fixed Manager tools; this constructor deliberately does not pull Phase 9
-// Managed lifecycle/use-lease behavior forward.
+// permission-preserving execution tools. Phase 10's canonical server composes
+// these same registration helpers with the lifecycle-aware continuation path.
 func NewRouterServer(discoveryService *discovery.Service, executionService *executionrouter.Service) *Server {
 	s := &Server{}
 	s.accepting.Store(true)
@@ -72,7 +72,7 @@ func registerV2ExecutionTools(server *mcp.Server, service *executionrouter.Servi
 				IdempotentHint:  definition.Idempotent,
 				OpenWorldHint:   &openWorld,
 			},
-		}, func(ctx context.Context, _ *mcp.CallToolRequest, input executionrouter.Input) (*mcp.CallToolResult, any, error) {
+		}, func(ctx context.Context, req *mcp.CallToolRequest, input executionrouter.Input) (*mcp.CallToolResult, any, error) {
 			if service == nil {
 				failure := &executionrouter.ExecutionError{
 					Code:      executionrouter.CodeManagerUnavailable,
@@ -82,13 +82,16 @@ func registerV2ExecutionTools(server *mcp.Server, service *executionrouter.Servi
 				}
 				return executionFailureResult(failure), nil, nil
 			}
+			if req != nil && req.Session != nil {
+				ctx = downstream.WithLegacyCallbackTarget(ctx, newUpstreamCallbackTarget(req.Session))
+			}
 			result, failure := service.Execute(ctx, definition.Class, input)
 			if failure != nil {
 				return executionFailureResult(failure), nil, nil
 			}
 			// Return the downstream CallToolResult itself with an any output type.
 			// The MCP SDK therefore does not synthesize or flatten content and all
-			// text/image/audio/resource/structured/isError fields remain intact.
+			// text/image/audio/resource/structured/isError/input-required fields remain intact.
 			return result, nil, nil
 		})
 	}
