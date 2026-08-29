@@ -78,7 +78,7 @@ func buildDiscoveryFixture(t *testing.T) (*Service, *catalog.Catalog, *routingpr
 			if err := store.RequireEmbedding(ctx, "gen_phase7", roleProjection.role, member, provider.Identity(), roleProjection.projection); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := store.StoreEmbedding(ctx, "gen_phase7", roleProjection.role, member, provider.Identity(), roleProjection.projection, basisVector(7, item.dimension)); err != nil {
+			if _, err := store.StoreEmbedding(ctx, "gen_phase7", roleProjection.role, member, provider.Identity(), roleProjection.projection, basisVector(8, item.dimension)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -96,11 +96,15 @@ func buildDiscoveryFixture(t *testing.T) (*Service, *catalog.Catalog, *routingpr
 		if err := cat.AttachArtifact(ctx, "gen_phase7", enrichment.RoleToolEnrichment, member, artifact.Key, false, true); err != nil {
 			t.Fatal(err)
 		}
-		enrichedProjection := retrieval.Projection{Version: "phase7-test-enriched/v1", Text: item.guidance.Purpose, Fingerprint: "sha256:phase7-enriched-" + member}
+		enrichedProjection := retrieval.Projection{Version: "phase7-test-enriched/v1", Text: string(guidanceBody), Fingerprint: "sha256:phase7-enriched-" + member}
 		if err := store.RequireEmbedding(ctx, "gen_phase7", enrichment.RoleEnrichedEmbedding, member, provider.Identity(), enrichedProjection); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.StoreEmbedding(ctx, "gen_phase7", enrichment.RoleEnrichedEmbedding, member, provider.Identity(), enrichedProjection, basisVector(7, item.dimension)); err != nil {
+		enrichedVectors, err := provider.Embed(ctx, []string{enrichedProjection.Text})
+		if err != nil || len(enrichedVectors) != 1 {
+			t.Fatalf("embed fixture enrichment %s: vectors=%d err=%v", member, len(enrichedVectors), err)
+		}
+		if _, err := store.StoreEmbedding(ctx, "gen_phase7", enrichment.RoleEnrichedEmbedding, member, provider.Identity(), enrichedProjection, enrichedVectors[0]); err != nil {
 			t.Fatal(err)
 		}
 	}
