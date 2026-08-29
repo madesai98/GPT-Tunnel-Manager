@@ -1,6 +1,6 @@
 # Implementation Status
 
-Date: 2026-08-28
+Date: 2026-08-29
 
 ## Current released baseline
 
@@ -10,7 +10,7 @@ Date: 2026-08-28
 
 Branch: `feature/v2-mcp-router`
 
-Status: **implementation in progress; Phases 1–5 complete, Phase 6 next**.
+Status: **implementation in progress; Phases 1–6 complete, Phase 7 next**.
 
 The canonical v2 implementation contract is `docs/V2_IMPLEMENTATION_PLAN.md`. `CONTEXT.md` and ADRs 0009 onward describe the accepted v2 architecture and supersede conflicting v1 topology assumptions where stated.
 
@@ -163,7 +163,37 @@ Phase 5 exit gate is satisfied: deterministic vector/lexical retrieval correctne
 
 ### Phase 6 — semantic enrichment, neighborhood invalidation, and routing preference data
 
-Next. Implement the bounded agent-driven enrichment workflow, semantic-neighbor construction and neighborhood-change invalidation, capability reconciliation, Ambiguity Reviews, and Routing Profiles/Preferences persistence/semantics using the Phase 5 deterministic retrieval substrate. Keep preferences independent of the Index Generation/Routing State Hash and do not pull Phase 7 final search fusion or Execution Handle APIs forward.
+Complete through commit `9311d4bf0d5a5acbf517aeac8ba11957338179ed` (primary implementation `ed26457b48a8055488d743de63111e7eea9f1933`).
+
+`internal/enrichment`, `internal/routingprefs`, and the Phase 4/5 catalog/retrieval substrate now provide:
+
+- a schema-v3 persistent enrichment-batch store with deterministic immutable batch identities and bounded `tool_enrichment`, `capability_reconciliation`, and optional `ambiguity_review` work items;
+- multi-agent submission semantics where the first valid response wins, an identical repeat is idempotent, and a conflicting repeat returns a stable enrichment-batch conflict instead of overwriting accepted work;
+- persistence of the accepted response before downstream materialization, plus restart/re-entry repair that replays the accepted response idempotently when artifact/embedding completion was interrupted after acceptance;
+- bounded deterministic tool-enrichment batches built from authoritative source contracts and the Phase 5 exact-cosine source-description index;
+- deterministic top-K semantic neighborhoods with ordered membership/source fingerprints included in the neighborhood context identity, so a new or changed tool entering another tool's neighborhood invalidates otherwise reusable enrichment even when no old reverse dependency existed;
+- content-addressed tool-enrichment artifacts whose dependencies include the authoritative tool, semantic neighbors, protocol version, and neighborhood context, with exact dependency/context reuse only;
+- a required enriched-embedding channel for accepted semantic guidance using the configured Phase 5 embedding provider/model identity, participating in generation dependency readiness;
+- a required global capability-reconciliation batch and validated capability-hierarchy artifact, including known-tool membership, parent existence, acyclic hierarchy validation, and coverage that assigns every indexed tool to reconciled capability data;
+- non-blocking Ambiguity Reviews generated only from accepted reconciliation output, with source-grounded summaries/comparative details, conditional use cases, and suggested preference options; open reviews do not block generation promotion and may be resolved after promotion without semantic reindexing;
+- ambiguity validation that requires grounded comparative information for each competing tool without forcing invented symmetric pros/cons when the source only supports one side;
+- the accepted ten ToolAnnotation-derived executor classes with MCP annotation defaults normalized independently from semantic enrichment and routing preferences;
+- semantic-source plus normalized-executor preference-assumption fingerprints so preference state is bound to the authoritative semantic/execution assumptions it was written against;
+- a persistent Routing Profile/Preference service with optimistic `expected_preference_revision`, identical-write no-ops, stable `preference_conflict` on stale writes, and revision changes isolated from `routing_state_hash`/semantic generations;
+- deterministic preference precedence support for profile scope over Global and conditional-tool over tool-set over server specificity;
+- equal-scope/equal-specificity conflict handling that marks conflicting rules `needs_review` rather than applying newest-wins behavior;
+- target reconciliation that marks preferences `needs_review` when a bound tool is removed or its relevant semantic-source/executor assumption fingerprint changes, without transferring preference state to semantically similar replacements;
+- an idempotent schema-v3 migration for the new batch/index state while retaining the pure-Go SQLite and `CGO_ENABLED=0` portability contract.
+
+Focused Phase 6 tests cover immutable/unclaimed batch delivery, first-valid/idempotent/conflicting multi-agent submissions, required-generation promotion blocking, accepted-response repair both in-process and after catalog reopen, deterministic semantic-neighborhood membership invalidation, enrichment artifact reuse boundaries, enriched-embedding materialization, capability reconciliation and hierarchy validation, non-blocking post-promotion Ambiguity Reviews, source-grounded ambiguity validation, all ten executor classes/defaults, optimistic preference revisions/idempotent writes, profile/global and specificity precedence, equal-specificity review conflicts, assumption-fingerprint behavior, and removed/changed/reclassified target `needs_review` transitions.
+
+Phase 6 implementation CI run `33261211514` completed successfully: `go mod tidy` produced zero diff, `go test ./...` and `go vet ./...` passed, the Phase 5 retrieval benchmark step remained green, native Linux/Windows/macOS GUI builds passed, Windows process/DPAPI checks passed, and all six headless `CGO_ENABLED=0` cross-build targets passed.
+
+Phase 6 exit gate is satisfied: required tool enrichment and global capability reconciliation can complete incrementally and survive interruption, semantic-neighborhood membership changes invalidate affected enrichment deterministically, open Ambiguity Reviews do not block promotion and can be resolved later, and Routing Profiles/Preferences can be saved, changed, conflicted, and reconciled through an independent preference revision without forcing semantic reindexing.
+
+### Phase 7 — search quality and discovery semantics
+
+Next. Implement the accepted search-quality/fusion behavior on top of the completed deterministic retrieval, semantic-enrichment, capability, and routing-preference substrates. Do not pull later execution-handle/lifecycle work forward unless required by the canonical Phase 7 contract.
 
 ## Clean v2 break
 
