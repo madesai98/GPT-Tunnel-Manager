@@ -70,6 +70,25 @@ func (t *Tracker) Reconcile(ctx context.Context, currentHash string) (Snapshot, 
 	return state, true, nil
 }
 
+// AdvanceRoutingRevision records a routing-relevant runtime event whose
+// correctness proof is stored elsewhere, such as a dirty catalog partition
+// caused by live tools/list drift. It deliberately leaves RoutingStateHash
+// unchanged: revision is diagnostic/order metadata, while the catalog's dirty
+// state and source fingerprints provide the fail-closed proof.
+func (t *Tracker) AdvanceRoutingRevision(ctx context.Context) (Snapshot, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	state, err := t.backend.Load(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	state.RoutingRevision++
+	if err := t.backend.Store(ctx, state); err != nil {
+		return Snapshot{}, err
+	}
+	return state, nil
+}
+
 func (t *Tracker) AdvancePreferenceRevision(ctx context.Context) (Snapshot, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -147,7 +166,6 @@ func cloneInt(value *int) *int {
 }
 
 // MemoryBackend is useful before the SQLite catalog backend lands and in tests.
-// Release routing state will use the Phase 4 SQLite implementation.
 type MemoryBackend struct {
 	mu    sync.Mutex
 	state Snapshot

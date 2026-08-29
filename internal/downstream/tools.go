@@ -2,17 +2,13 @@ package downstream
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"sort"
 
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const ToolFingerprintAlgorithm = "sha256"
+const ToolFingerprintAlgorithm = toolcontract.FingerprintAlgorithm
 
 type ToolSnapshot struct {
 	Tools       []*mcp.Tool
@@ -20,15 +16,14 @@ type ToolSnapshot struct {
 }
 
 func (s ToolSnapshot) Clone() ToolSnapshot {
-	body, err := json.Marshal(s.Tools)
+	fingerprint, tools, err := toolcontract.FingerprintTools(s.Tools)
 	if err != nil {
 		return ToolSnapshot{Fingerprint: s.Fingerprint}
 	}
-	var tools []*mcp.Tool
-	if err := json.Unmarshal(body, &tools); err != nil {
-		return ToolSnapshot{Fingerprint: s.Fingerprint}
+	if s.Fingerprint != "" {
+		fingerprint = s.Fingerprint
 	}
-	return ToolSnapshot{Tools: tools, Fingerprint: s.Fingerprint}
+	return ToolSnapshot{Tools: tools, Fingerprint: fingerprint}
 }
 
 func SnapshotTools(ctx context.Context, session *mcp.ClientSession) (ToolSnapshot, error) {
@@ -40,32 +35,11 @@ func SnapshotTools(ctx context.Context, session *mcp.ClientSession) (ToolSnapsho
 		if err != nil {
 			return ToolSnapshot{}, err
 		}
-		if tool == nil || tool.Name == "" {
-			return ToolSnapshot{}, errors.New("downstream tools/list returned a tool without a name")
-		}
 		tools = append(tools, tool)
 	}
-	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
-	for i := 1; i < len(tools); i++ {
-		if tools[i-1].Name == tools[i].Name {
-			return ToolSnapshot{}, fmt.Errorf("downstream tools/list returned duplicate tool name %q", tools[i].Name)
-		}
-	}
-
-	body, err := json.Marshal(tools)
+	fingerprint, canonical, err := toolcontract.FingerprintTools(tools)
 	if err != nil {
-		return ToolSnapshot{}, fmt.Errorf("marshal tools/list contract: %w", err)
+		return ToolSnapshot{}, err
 	}
-	digest := sha256.Sum256(body)
-
-	// Round-trip once so the stored authoritative snapshot cannot alias SDK
-	// objects later mutated by caller code or a notification handler.
-	var snapshotTools []*mcp.Tool
-	if err := json.Unmarshal(body, &snapshotTools); err != nil {
-		return ToolSnapshot{}, fmt.Errorf("clone tools/list contract: %w", err)
-	}
-	return ToolSnapshot{
-		Tools:       snapshotTools,
-		Fingerprint: ToolFingerprintAlgorithm + ":" + hex.EncodeToString(digest[:]),
-	}, nil
+	return ToolSnapshot{Tools: canonical, Fingerprint: fingerprint}, nil
 }
