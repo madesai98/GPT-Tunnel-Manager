@@ -1,0 +1,7 @@
+# Separate downstream HTTP authentication from Manager authentication
+
+Status: accepted
+
+GPT Tunnel Manager v2 may authenticate as an MCP client when a configured HTTP downstream requires it. Downstream HTTP connections support MCP OAuth and a secret-backed static authorization/header mode. Interactive OAuth connect/reconnect is owned by the native desktop UI; OAuth tokens and state are stored under a Server-ID-scoped internal secret namespace, while reusable static credentials may use normal `secret://` references. These credentials never enter configuration JSON, the semantic index, enrichment batches, or Manager MCP calls, and they remain separate from the Manager Tunnel Runtime API key.
+
+This downstream-client credential boundary is separate from local Manager access protection. ADR 0018 may protect the loopback Manager MCP with an optional installation-scoped capability token, but GPT Tunnel Manager still does not operate a Manager OAuth/Auth Gateway. Routine OAuth access/refresh-token rotation does not invalidate the semantic index; explicit reconnect/logout/account or scope changes, and static credential replacement, dirty the affected Server Entry. Credential-bearing remote HTTP requires HTTPS unless the user explicitly enables the advanced insecure-transport override; loopback HTTP is exempt.

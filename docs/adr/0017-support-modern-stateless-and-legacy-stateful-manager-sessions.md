@@ -1,0 +1,3 @@
+# Support modern stateless and legacy stateful Manager sessions
+
+GPT Tunnel Manager exposes one Manager MCP URL while supporting both modern MCP 2026-07-28 stateless request handling and older initialize-based clients that require a stateful session for server-to-client callbacks. A protocol/session dispatch layer routes both modes into the same router implementation so v2 can preserve legacy elicitation, sampling, roots, and related multi-round-trip behavior without giving up the modern stateless path.

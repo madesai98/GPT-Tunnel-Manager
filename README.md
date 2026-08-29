@@ -1,48 +1,121 @@
 # GPT Tunnel Manager
 
-GPT Tunnel Manager is a portable Go desktop application for supervising local MCP servers through separate OpenAI Secure MCP Tunnels, plus a dedicated Manager MCP tunnel that lets ChatGPT control eligible server lifecycles.
+GPT Tunnel Manager is a portable Go desktop application that exposes one stable Manager MCP and routes its fixed tool surface to configured downstream MCP servers.
+
+V2 connects to downstream MCPs directly. Per-server Secure MCP Tunnels, per-server Developer Plugins, lifecycle markers, and lifecycle skills are not part of the v2 architecture.
 
 ## Architecture
 
-- GPT Tunnel Manager adds no authentication layer to the Manager MCP or participating server tunnels. Each MCP server remains responsible for any authentication it needs.
-- The OpenAI Runtime API key is used only by `tunnel-client` to access the OpenAI tunnel control plane.
-- Every Server Entry has an immutable `srv_...` ID and its own OpenAI `tunnel_...` ID.
-- Server modes are Always On, Managed, and Manual.
-- Transport types are Stdio, Managed HTTP, and External HTTP.
-- The Manager MCP exposes exactly four tools: `get_status`, `start`, `restart`, and `shutdown`.
-- Manager MCP lifecycle mutation accepts configured Server IDs only. It cannot receive executable paths, command arguments, environment variables, secret values, or tunnel IDs.
-- `tunnel-client` runs in the foreground under Tunnel Manager process ownership. Managed HTTP child processes are also owned by Tunnel Manager; External HTTP targets are never terminated by it.
-- Managed idle shutdown is enabled only when the installed `tunnel-client` telemetry format is explicitly known to support meaningful-activity classification.
-- Mutable configuration and managed tooling live in the strict Portable Root beside the application.
+- One fixed 19-tool Manager MCP is exposed at a loopback `/mcp` endpoint.
+- The Manager surface covers indexing/enrichment, discovery/detail, Routing Preferences, and ten permission-preserving execution classes.
+- Downstream MCPs connect directly over Stdio, Managed HTTP, or External HTTP.
+- Server modes are Always On, Managed, Manual, and Disabled.
+- Managed servers automatically start for routed work, remain alive while calls/tasks hold use leases, and idle-stop later.
+- Tool discovery is backed by a generation-based semantic catalog rather than by dynamically copying every downstream tool into the upstream surface.
+- Authoritative downstream schemas and MCP ToolAnnotations remain separate from semantic enrichment and Routing Preferences.
+- Live downstream tool-contract drift fails closed and marks routing stale before another unsafe dispatch can occur.
+- Optional local Manager capability protection is enabled by default. Browser-Origin requests are rejected regardless of that setting.
+- One optional Manager Secure MCP Tunnel may expose the Manager MCP remotely. There are no per-server tunnels.
+- `tunnel-client` is retained only for that optional Manager Tunnel.
 
-## Desktop application
+## Native desktop application
 
-The normal executable is a native Gio desktop application with a notification-area/system-tray icon. There is no browser-based management UI.
+The normal executable is a native Gio desktop application with system-tray support. There is no browser-based administration UI.
 
-The Servers page always begins with a built-in `Manager MCP` row. That row is not a normal Server Entry, cannot be deleted, and reports the Manager tunnel state with Manager-specific controls. Configured downstream Server Entries follow it.
+The desktop application provides:
 
-The native UI provides:
-
-- Manager MCP and downstream server status/lifecycle controls.
-- Add/edit/delete controls for downstream Server Entries only.
-- Stdio, Managed HTTP, and External HTTP configuration.
-- Environment and custom secret-reference configuration.
-- A dedicated masked `OpenAI Runtime API Key` field. The user enters only the key value; the fixed internal credential reference is not entered manually.
-- Downstream tunnel configuration that uses the Manager Runtime API key by default.
-- Custom-secret storage for downstream MCP/environment secrets.
-- Tunnel-client update and rollback controls.
-- Structured log filtering, clearing, and text/JSONL export.
+- Server Entry add/edit/delete for all four lifecycle modes and all three downstream transports.
+- Direct Start, Stop, and Restart controls backed by the same router-native lifecycle service used by MCP execution.
+- Downstream OAuth Connect/Reconnect/Disconnect and static-header/API-key authentication.
+- Environment and secret-environment configuration without requiring users to type internal secret-reference names.
+- Embedding provider configuration, including base URL, model, optional dimensions, and credential storage.
+- Index status, refresh, enrichment-batch visibility, Ambiguity Reviews, and atomic commit controls.
+- Routing Profile and Routing Preference management with conflict/review state.
+- Local Manager port and capability-protection controls.
+- Optional Manager Secure MCP Tunnel configuration and runtime status.
+- Structured log filtering, clearing, text/JSONL export, and secret redaction.
+- `tunnel-client` install/update/rollback controls for the Manager Tunnel only.
 - Launch-at-login, start-hidden-in-tray, close behavior, explicit exit confirmation, disk logging, and appearance settings.
+- Application self-update using SHA-256 release-digest verification and a separate updater terminal/process.
 
-Minimize and the configured close-to-tray behavior remove the native window from the taskbar while the Manager process, tray icon, tunnels, and owned servers continue running. `Open Manager` from the tray or a second-launch focus request restores a native Gio window. Explicit Exit stops owned MCP/tunnel processes and removes the tray icon.
+Minimize and configured close-to-tray behavior remove the native window while the Manager process and eligible downstream runtimes continue running. Explicit Exit shuts down Manager-owned runtimes and removes the tray icon.
 
-Run from source:
+## First-time setup
+
+1. Start GPT Tunnel Manager and configure the embedding provider in Settings.
+2. Add downstream Server Entries. No Tunnel ID or ChatGPT Developer Plugin is required for a downstream server.
+3. Use Index to refresh the catalog, complete required enrichment/capability reconciliation through the Manager MCP, and commit the ready generation.
+4. Optionally create Routing Profiles and Routing Preferences.
+5. Connect an MCP-capable client or agent to the Manager MCP.
+6. Optionally create one OpenAI Secure MCP Tunnel for the Manager MCP and configure its Tunnel ID plus Runtime API key in Settings.
+
+When Local Manager Access Protection is enabled, GPT Tunnel Manager supplies the local capability to its managed `tunnel-client` through an environment-backed MCP Authorization header. The capability is not placed in command-line arguments or configuration files.
+
+## Manager MCP workflow
+
+A normal agent workflow is:
+
+```text
+index_status / index_refresh
+-> required enrichment + capability reconciliation
+-> index_commit
+-> search_tools
+-> get_tool
+-> one permission-class executor
+```
+
+`get_tool` returns the authoritative downstream tool contract separately from derived semantic guidance and provides the authenticated Execution Handle required by an executor.
+
+The Manager also proxies protocol-required task/resource continuations and legacy callback behavior through Manager-owned mappings rather than replaying originating tool calls.
+
+## Authentication boundaries
+
+Manager Tunnel credentials, embedding credentials, downstream static credentials, downstream OAuth credentials/tokens, and local Manager capability protection are separate credential boundaries.
+
+Credential values are stored through the platform secret store and are never persisted directly in `manager.json` or `servers.json`.
+
+- Windows: DPAPI scoped to the current user.
+- macOS: Keychain through the system `security` utility.
+- Linux: Secret Service through `secret-tool`; unavailable/locked keyrings fail closed.
+- Controlled deployments may use the deterministic `GTM_SECRET_<hash>` environment fallback.
+
+Credential-bearing External/Managed HTTP endpoints require HTTPS unless the explicit insecure transport override is enabled for that Server Entry.
+
+## Embeddings and routing data
+
+Tool Catalog embeddings are derived routing artifacts. Search-query embeddings are memory-only and are not persistently cached by default.
+
+If a remote embedding provider is configured, projected tool text/schema material and search queries used for embeddings are sent to that provider. Raw secret values are not part of the embedding/index projections.
+
+Routing Preferences use their own preference revision and take effect without forcing semantic reindexing. A preference is marked for review rather than silently transferred if its referenced tool or routing assumptions change.
+
+## Manager Secure MCP Tunnel
+
+The optional Manager Tunnel uses the official `openai/tunnel-client` runtime.
+
+Unless a binary override is configured, GPT Tunnel Manager can install/update `tunnel-client`, verify release checksums, probe compatibility, atomically promote the selected version, and retain a previous version for rollback.
+
+The child process receives the OpenAI Runtime API key through its environment. When local Manager protection is enabled, its loopback Authorization header is also supplied through an environment reference rather than a secret-bearing argv value.
+
+## Self-update
+
+Application self-update downloads the selected release into a temporary directory, verifies its SHA-256 digest, stages only application files, launches an independent updater process/terminal, stops the running application, replaces application files, and restarts GPT Tunnel Manager.
+
+The updater preserves the Portable Root user-data directories:
+
+- `config/`
+- `data/`
+- `tools/`
+
+The v2 clean break explicitly removes the obsolete packaged v1 `lifecycle-skill/` directory during replacement, and v2 release archives containing that obsolete path are rejected by the staging logic.
+
+## Running from source
 
 ```bash
 go run ./cmd/tunnel-manager
 ```
 
-Headless operation for diagnostics or controlled deployments:
+Headless operation:
 
 ```bash
 go run -tags nogui ./cmd/tunnel-manager --no-gui
@@ -55,62 +128,25 @@ tunnel-manager version
 tunnel-manager print-root
 tunnel-manager init
 tunnel-manager validate
-tunnel-manager marker srv_0123456789abcdef0123456789abcdef
-printf '%s' "$CONTROL_PLANE_API_KEY" | tunnel-manager secret put secret://openai/runtime/default
+printf '%s' "$VALUE" | tunnel-manager secret put secret://custom/example
 ```
 
-## First-time setup
-
-1. Create one Manager tunnel in OpenAI Platform and one tunnel for each MCP server you want to expose.
-2. Create a Restricted Runtime API key with Tunnels Read + Use.
-3. Start GPT Tunnel Manager. In Settings, paste only the Runtime API key value into `OpenAI Runtime API Key` and choose `Store API Key`.
-4. Configure the Manager Tunnel ID. The Manager credential reference is fixed internally as `secret://openai/runtime/default`; the UI does not ask you to type it.
-5. Add Server Entries. Their tunnel runtimes use the Manager Runtime API key by default. Create one ChatGPT Developer Mode plugin per Server Entry.
-6. Put this one-line app description in every participating Developer Plugin description:
-
-```text
-GTM PLUGIN | <server-id> | Follow the gpt-tunnel-manager-lifecycle skill before using this plugin
-```
-
-7. Install `assets/lifecycle-skill/SKILL.md` separately as the generic lifecycle skill. The Manager Developer Plugin itself only connects to the Manager tunnel and exposes the four Manager MCP tools.
-
-## Secret storage
-
-- Windows: native DPAPI scoped to the current user; only ciphertext is stored under Portable Root.
-- macOS: Keychain via the system `security` utility.
-- Linux: Secret Service via `secret-tool`; unavailable or locked keyrings fail closed rather than storing plaintext.
-- Controlled deployments may use the deterministic `GTM_SECRET_<hash>` environment override.
-
-Configuration files contain secret references, never secret values. Secrets loaded at runtime are registered with the central redactor before related child output is retained.
-
-The known OpenAI Runtime API key uses the fixed internal reference `secret://openai/runtime/default`. Arbitrary `secret://...` references are intended for custom downstream secrets rather than for normal Manager-key setup.
-
-## tunnel-client
-
-Unless `tunnel_client.binary_path` is configured, GPT Tunnel Manager:
-
-1. Queries the official `openai/tunnel-client` latest release.
-2. Selects the exact OS/architecture archive.
-3. Requires and verifies the release asset SHA-256 digest.
-4. Extracts into `tools/tunnel-client/<version>/`.
-5. Runs a compatibility probe before promotion.
-6. Atomically updates `active.json` while retaining a previous version for rollback.
-
-Existing foreground runtimes keep the binary they started with until they are restarted.
+The `secret` command is an advanced/automation surface. Ordinary native v2 setup does not require manually entering internal secret-reference names.
 
 ## Development and verification
 
-The repository uses Go 1.24 because the native Gio dependency requires it.
+The project CI uses Go 1.25.x.
 
 ```bash
 go mod tidy
 git diff --exit-code -- go.mod go.sum
 go test ./...
+go test -race ./...
 go vet ./...
 go build ./cmd/tunnel-manager
 ```
 
-CI verifies the native desktop build on Linux, Windows, and macOS and headless-compatible builds for:
+CI verifies native desktop builds on all six release targets:
 
 - windows/amd64
 - windows/arm64
@@ -119,6 +155,6 @@ CI verifies the native desktop build on Linux, Windows, and macOS and headless-c
 - darwin/amd64
 - darwin/arm64
 
-Windows CI also exercises the native DPAPI secret-store round trip. Release Windows GUI binaries are linked with the Windows GUI subsystem so the normal desktop launch does not open a console window.
+It also verifies all six `CGO_ENABLED=0` headless cross-build targets, Windows no-console child process behavior, Windows DPAPI storage, search-quality gates, retrieval-scale benchmarks, and the release/self-update clean-break tests.
 
-See `docs/IMPLEMENTATION_PLAN.md`, `docs/IMPLEMENTATION_STATUS.md`, and ADR 0008 for the current architecture.
+See `CONTEXT.md`, `docs/V2_IMPLEMENTATION_PLAN.md`, `docs/IMPLEMENTATION_STATUS.md`, and ADR 0009 onward for the v2 architecture and implementation history.

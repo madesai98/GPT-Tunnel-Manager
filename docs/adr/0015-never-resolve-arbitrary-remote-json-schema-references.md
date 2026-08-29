@@ -1,0 +1,3 @@
+# Never resolve arbitrary remote JSON Schema references
+
+GPT Tunnel Manager validates downstream MCP schemas locally and supports in-document `$ref`/`$defs`, but it does not fetch arbitrary remote schema references. This deliberately trades some JSON Schema compatibility for a strict network boundary: untrusted downstream schemas must not be able to trigger outbound requests or SSRF during indexing or execution validation; tools that require unresolved external schemas are reported as incompatible instead.

@@ -1,15 +1,28 @@
-# GPT Tunnel Manager v1.0.24
+# GPT Tunnel Manager v2.0.0
 
-## Copyable one-line app descriptions
+GPT Tunnel Manager v2 is a major architecture rewrite. The application now exposes one stable Manager MCP and directly connects to downstream MCP servers instead of creating a tunnel/plugin/lifecycle stack for every server.
 
-This release makes the per-server Developer Plugin app description directly copyable from the native UI.
+## Highlights
 
-- Renames the server `Marker` and editor `Lifecycle Marker` buttons to `Copy App Description`.
-- Clicking `Copy App Description` now writes the generated description directly to the system clipboard instead of only showing it in the status message.
-- Changes the generated description to the single-line format `GTM PLUGIN | srv_... | Follow the gpt-tunnel-manager-lifecycle skill before using this plugin` so it works in app-description fields that do not preserve newlines.
-- Updates marker parsing and tests for the new one-line format.
-- Updates both the installable lifecycle skill and the compiled packaged skill copy to recognize the new `GTM PLUGIN` format.
-- Updates README, architecture context, ADR 0004, and the implementation contract to document the one-line app description.
+- One fixed 19-tool Manager MCP for indexing, discovery, tool detail, Routing Preferences, and permission-preserving execution.
+- Direct downstream MCP connectivity over Stdio, Managed HTTP, and External HTTP.
+- Four lifecycle modes: Always On, Managed, Manual, and Disabled.
+- Router-native Managed Use Leases with automatic start, active-call/task protection, and idle-stop.
+- Generation-based semantic Tool Catalog with atomic promotion, deterministic routing-state freshness, and crash-safe staging.
+- Agent-driven semantic enrichment, capability reconciliation, non-blocking Ambiguity Reviews, and Routing Profiles/Preferences.
+- Generation-bound authenticated Execution Handles and ten MCP ToolAnnotation-derived execution classes.
+- Live downstream tool-contract drift detection that fails closed before unsafe dispatch.
+- Modern stateless and legacy stateful upstream MCP compatibility, including required task/resource/callback continuation behavior.
+- Downstream OAuth and static credential support with credentials kept outside normal configuration/index data.
+- Local Manager capability protection enabled by default plus unconditional browser-Origin rejection.
+- One optional Manager Secure MCP Tunnel. `tunnel-client` is retained only for this Manager Tunnel.
+- Native Gio desktop management for servers, authentication, indexing, reviews, routing preferences, settings, logs, tray behavior, tunnel-client management, and application self-update.
+
+## Important v1 upgrade note
+
+V2 is intentionally a clean product/configuration break. Existing v1 configuration and routing data are not parsed or converted into v2 state. The updater preserves the Portable Root user-data directories while the v2 first-launch/cutover logic treats legacy v1 configuration/routing state as opaque legacy data and initializes strict v2-native state.
+
+The obsolete packaged `lifecycle-skill/` directory is removed during v2 replacement and is rejected if it appears in a v2 release archive.
 
 ## Included builds
 
@@ -22,8 +35,8 @@ This release makes the per-server Developer Plugin app description directly copy
 - Source archives
 - `SHA256SUMS.txt`
 
-## Changes since v1.0.23
+## Verification
 
-- Copy Developer Plugin app descriptions directly to the clipboard.
-- Replace the old multiline lifecycle marker with the condensed one-line `GTM PLUGIN` description.
-- Keep the lifecycle skill and packaged documentation aligned with the new description format.
+The v2 release gate includes committed module-graph verification, repository-wide tests, repository-wide race tests in CI, the dedicated search-quality gate, self-update clean-break tests, `go vet`, retrieval-scale benchmarks, six native desktop release builds, six `CGO_ENABLED=0` headless cross-builds, and Windows process/DPAPI checks.
+
+See `README.md`, `CONTEXT.md`, `docs/V2_IMPLEMENTATION_PLAN.md`, and `docs/IMPLEMENTATION_STATUS.md` for the complete v2 architecture and implementation history.

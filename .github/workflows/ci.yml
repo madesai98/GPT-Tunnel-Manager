@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -24,15 +24,33 @@ jobs:
           git diff --exit-code -- go.mod go.sum
       - name: Test
         run: go test ./...
+      - name: Race detector
+        run: go test -race ./...
+      - name: Phase 7 discovery quality gates
+        run: go test ./internal/discovery -run '^TestSection18SearchQualityGates$' -v
       - name: Vet
         run: go vet ./...
+      - name: Retrieval scale benchmarks
+        run: go test ./internal/retrieval -run '^$' -bench 'Benchmark(ExactCosineSearch|LexicalSearch)' -benchmem -benchtime=200ms
 
   native-gui-build:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - target: linux-amd64
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+          - target: windows-amd64
+            runner: windows-2025
+          - target: windows-arm64
+            runner: windows-11-arm
+          - target: darwin-amd64
+            runner: macos-15-intel
+          - target: darwin-arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -42,7 +60,9 @@ jobs:
       - name: Install Gio Linux build dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
-      - name: Build native desktop app
+      - name: Report native target
+        run: go env GOOS GOARCH
+      - name: Build native desktop app (${{ matrix.target }})
         run: go build ./cmd/tunnel-manager
       - name: Test Windows no-console child process configuration
         if: runner.os == 'Windows'
@@ -52,7 +72,7 @@ jobs:
         run: go test ./internal/secrets
 
   cross-build-headless:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:

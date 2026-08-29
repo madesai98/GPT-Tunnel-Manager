@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version, for example v1.0.1
+        description: Release version, for example v2.0.0
         required: true
-        default: v1.0.1
+        default: v2.0.0
   push:
     branches:
       - main
@@ -58,8 +58,32 @@ jobs:
             exit 1
           fi
 
-  build:
+  verify:
     needs: metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - name: Install Gio Linux build dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+      - name: Verify module graph is committed
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - name: Test
+        run: go test ./...
+      - name: Phase 7 discovery quality gates
+        run: go test ./internal/discovery -run '^TestSection18SearchQualityGates$' -v
+      - name: Verify release/self-update clean break
+        run: go test ./internal/selfupdate -run 'Test(ExtractZip|ExtractTarGzip|ReleaseRelativePathRejectsLegacyLifecycleBundle|UpdaterScriptsRemoveLegacyLifecycleBundle)' -v
+      - name: Vet
+        run: go vet ./...
+
+  build:
+    needs: [metadata, verify]
     strategy:
       fail-fast: false
       matrix:
@@ -111,9 +135,9 @@ jobs:
           fi
           go build -trimpath -ldflags="$LDFLAGS" -o "stage/$BASENAME/tunnel-manager${EXT}" ./cmd/tunnel-manager
           cp README.md "stage/$BASENAME/README.md"
-          if [[ -d assets/lifecycle-skill ]]; then
-            mkdir -p "stage/$BASENAME/lifecycle-skill"
-            cp -R assets/lifecycle-skill/. "stage/$BASENAME/lifecycle-skill/"
+          if [[ -e "stage/$BASENAME/lifecycle-skill" ]]; then
+            echo "obsolete lifecycle-skill bundle must not be packaged in v2" >&2
+            exit 1
           fi
       - name: Package Unix release
         if: runner.os != 'Windows'
@@ -140,7 +164,7 @@ jobs:
           retention-days: 7
 
   publish:
-    needs: [metadata, build]
+    needs: [metadata, verify, build]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -169,12 +193,12 @@ jobs:
             echo
             echo "## Highlights"
             echo
-            echo "- Native Gio desktop application only; there is no browser-based administration UI."
-            echo "- System-tray-first desktop behavior on Windows, Linux, and macOS."
-            echo "- Dedicated value-only OpenAI Runtime API key field backed by platform secret storage."
-            echo "- Always On, Managed, and Manual lifecycle modes with Stdio, Managed HTTP, and External HTTP transports."
-            echo "- Dedicated Manager MCP exposing exactly four lifecycle tools: get_status, start, restart, and shutdown."
-            echo "- No additional Manager/plugin authentication layer; each downstream MCP server owns its own authentication."
+            echo "- One fixed 19-tool Manager MCP for indexing, discovery, routing preferences, and permission-preserving execution."
+            echo "- Direct downstream MCP connectivity over Stdio, Managed HTTP, and External HTTP with no per-server tunnels or Developer Plugins."
+            echo "- Always On, Managed, Manual, and Disabled lifecycle modes with router-native Managed use leases and idle-stop."
+            echo "- Generation-based semantic catalog with enrichment, capability reconciliation, Ambiguity Reviews, and Routing Profiles/Preferences."
+            echo "- Optional single Manager Secure MCP Tunnel plus optional local Manager capability protection enabled by default."
+            echo "- Native Gio desktop application with tray, structured logging, tunnel-client management, and self-update."
             echo
             echo "## Release binaries"
             echo

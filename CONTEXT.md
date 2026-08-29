@@ -1,118 +1,134 @@
 # GPT Tunnel Manager Context
 
-GPT Tunnel Manager is a portable desktop control plane for running local MCP servers through separate OpenAI Secure MCP Tunnel connections and controlling eligible lifecycles from both the native desktop UI and ChatGPT.
+GPT Tunnel Manager is a portable desktop MCP aggregation and lifecycle control plane. It exposes one upstream Manager MCP and directly connects to configured downstream MCP servers while preserving their authoritative tool contracts.
 
-This document defines the settled v1 vocabulary and architecture. ADR 0008 supersedes the earlier Shared OAuth/Auth Gateway proposal.
+## Language
 
-## Core terms
+**GPT Tunnel Manager**:
+The desktop application that owns Server Entries, the Manager MCP, downstream MCP client runtimes, lifecycle policy, the semantic Tool Catalog, and the optional Manager Tunnel.
+_Avoid_: Tunnel Manager when the shorter name could be confused with a tunnel runtime
 
-**Tunnel Manager**  
-The cross-platform desktop application that owns Server Entries, Tunnel Runtimes, lifecycle policy, the Manager MCP, local diagnostics, and managed `tunnel-client` installation.
+**Manager MCP**:
+The single upstream MCP surface exposed by GPT Tunnel Manager to ChatGPT or another MCP-capable agent harness. It exposes a fixed 19-tool surface covering indexing, discovery, tool detail, ten permission-class execution tools, and routing-preference management.
+_Avoid_: Manager Developer Plugin, lifecycle MCP
 
-**MCP Server**  
-An external MCP implementation registered with Tunnel Manager and exposed through its own tunnel.
+**Downstream MCP**:
+A configured MCP server that GPT Tunnel Manager connects to as an MCP client and whose tools may be discovered and routed through the Manager MCP.
+_Avoid_: participating plugin, per-server plugin
 
-**Server Entry**  
-Tunnel Manager's persisted identity and configuration for one MCP Server.
+**Server Entry**:
+The persisted GPT Tunnel Manager identity and configuration for one Downstream MCP.
 
-**Server ID**  
-The immutable generated `srv_...` identifier for one Server Entry. It is the authoritative identity used by Manager MCP lifecycle tools and participating Developer Plugin Lifecycle Markers. Deleting and recreating an entry creates a new ID.
+**Server ID**:
+The immutable generated `srv_...` identifier for one Server Entry. It is an internal stable identity for configuration, indexing, lifecycle, diagnostics, and routing dependencies.
 
-**Server Mode**  
-The lifecycle policy for a Server Entry:
+**Server Mode**:
+The lifecycle policy of a Server Entry: Always On, Managed, Manual, or Disabled.
 
-- **Always On**: Desired State is Running whenever Tunnel Manager is active and the entry is enabled.
-- **Managed**: Desired State may be changed by the desktop UI or Manager MCP.
-- **Manual**: Desired State may be changed only by the desktop UI.
+**Always On**:
+A Server Mode in which the Downstream MCP is kept running while GPT Tunnel Manager is active.
 
-**Enabled State**  
-Whether a Server Entry is permitted to run. Disabled entries are forced stopped and cannot be started until re-enabled.
+**Managed**:
+A Server Mode in which GPT Tunnel Manager may automatically start the Downstream MCP for routed work and later stop it after its idle policy permits.
 
-**Desired State**  
-Whether Tunnel Manager currently intends an entry to be Running or Stopped.
+**Manual**:
+A Server Mode in which lifecycle start/stop control remains exclusively with the native UI.
 
-**Observed State**  
-The runtime condition Tunnel Manager observes: Stopped, Starting, Ready, Degraded, Retry Wait, or Stopping.
+**Disabled**:
+A Server Mode that excludes the Server Entry from runtime acquisition and committed routing membership until the user changes its mode.
 
-**Managed Activity**  
-Meaningful MCP request work that resets a Managed entry's idle timer. Initialization, keepalives, health probes, and routine notification chatter do not count.
+**Desired State**:
+Whether GPT Tunnel Manager currently intends an owned Downstream MCP runtime to be running or stopped.
 
-## Transport and ownership
+**Observed State**:
+The lifecycle condition GPT Tunnel Manager currently observes for a Downstream MCP runtime, such as Stopped, Starting, Ready, Degraded, Retry Wait, or Stopping.
 
-**Transport Type**  
-How a Server Entry reaches its MCP Server:
+**Managed Use Lease**:
+A temporary claim representing active routed work against a Managed Downstream MCP. A Managed runtime cannot idle-stop while one or more use leases are active.
+_Avoid_: tunnel activity lease, telemetry lease
 
-- **Stdio**: `tunnel-client` launches the configured executable and communicates over stdio.
-- **Managed HTTP**: Tunnel Manager launches and owns an HTTP MCP process; `tunnel-client` connects to the configured local URL.
-- **External HTTP**: The HTTP MCP service already exists independently; Tunnel Manager owns only its tunnel runtime and never terminates the external process.
+## Routing and indexing
 
-Commands are always persisted as executable plus argument array. There is no shell-command string in configuration and Manager MCP tools cannot supply commands.
+**Authoritative Source Contract**:
+The exact downstream MCP metadata GPT Tunnel Manager discovered for a tool, including its name, title, description, schemas, annotations, `_meta`, and server context. Router-generated metadata never replaces it.
+_Avoid_: generated schema, enriched contract
 
-**Owned MCP Process**  
-An MCP server process launched by Tunnel Manager or its owned tunnel runtime. It is terminated when its Server Entry stops or Tunnel Manager exits.
+**Derived Router Guidance**:
+Structured semantic metadata generated to improve discovery and tool choice without changing the Authoritative Source Contract or permission classification.
+_Avoid_: authoritative metadata
 
-**Tunnel Runtime**  
-A foreground `tunnel-client` process owned by Tunnel Manager for the Manager MCP or one Server Entry.
+**Tool Catalog**:
+The persistent collection of authoritative Downstream MCP tool contracts and their routing-derived artifacts.
+_Avoid_: dynamic upstream tool list
 
-**Runtime Group**  
-The process-tree ownership boundary for one active Server Entry or the Manager tunnel. Unix-like platforms use process-group semantics; Windows uses process-tree termination for Manager-owned descendants. Each Server Entry can be stopped independently and application shutdown cleans all Manager-owned descendants.
+**Index Generation**:
+A coherent immutable view of Tool Catalog membership and routing artifacts that is built in staging and atomically promoted to active.
 
-## ChatGPT integration
+**Routing Revision**:
+A monotonic ordering value advanced by routing-relevant mutations. It is diagnostic/order metadata, not by itself the freshness proof for an Index Generation.
 
-**Manager MCP**  
-The loopback MCP service built into Tunnel Manager. It exposes exactly:
+**Routing State Hash**:
+The deterministic identity of routing-relevant configuration and keyed routing-secret state that an Index Generation was built against. Routing is allowed only when the active generation matches the current routing state.
 
-- `get_status`
-- `start`
-- `restart`
-- `shutdown`
+**Semantic Enrichment**:
+Bounded structured Derived Router Guidance produced by the connected agent from authoritative tool records and selected semantic neighbors.
 
-Lifecycle mutation tools accept only immutable configured Server IDs. They never accept executable paths, arguments, environment variables, secret values, or Tunnel IDs.
+**Capability Reconciliation**:
+A second-stage enrichment pass that normalizes overlapping or near-synonymous capability paths across independently enriched tool batches. It is primarily automatic taxonomy cleanup; only ambiguities that materially affect tool choice become Ambiguity Reviews.
 
-The native Servers page also displays a built-in `Manager MCP` row first. It is a UI representation of the Manager service, not a persisted Server Entry, has no ordinary Server ID, and cannot be deleted.
+**Routing Preference**:
+A persisted user-authored ranking rule that prefers, avoids, or conditionally chooses one Server Entry or tool set over another. Routing Preferences are a separate overlay from Authoritative Source Contracts and Semantic Enrichment; they may affect discovery ranking and selection explanations but are guidance rather than access-control rules and can never change schemas, permissions, executor classes, authorization, or execution safety.
 
-**Developer Plugin**  
-A ChatGPT Developer Mode plugin connected to one tunnel. Each MCP Server has its own plugin; Tunnel Manager does not merge server tools into the Manager plugin.
+**Preference Revision**:
+A monotonic revision advanced by Routing Preference mutations. It is separate from the Routing State Hash and Index Generation; preference changes take effect immediately in ranking and cache keys without requiring semantic reindexing.
 
-**Manager Developer Plugin**  
-The Developer Plugin connected to the Manager tunnel. It exposes only the four Manager MCP lifecycle tools.
+**Routing Profile**:
+A named scope containing Routing Preferences for a particular project, workflow, or context. A Global layer applies everywhere; an explicitly active Routing Profile overrides Global rules where more specific profile rules apply. Agents may select a profile when they know the current context, but GPT Tunnel Manager does not silently infer project identity when uncertain.
+_Avoid_: automatic project identity
 
-**Participating Developer Plugin**  
-A per-server Developer Plugin whose description contains the Lifecycle Marker for its Server Entry.
+**Ambiguity Review**:
+An optional, non-blocking user-feedback step raised when overlapping tools cannot be ranked confidently from authoritative metadata and semantic enrichment alone. The connected agent presents the competing choices with source-grounded pros, cons, and conditional use cases, then records the user's decision as a Routing Preference or records that neutral behavior should remain. Unresolved reviews are marked `needs_user_feedback` and do not block an otherwise valid index generation.
 
-**Lifecycle Marker**  
-The standard description block:
+**Preference Review State**:
+A Routing Preference whose referenced tools or assumptions no longer match current catalog state is marked `needs_review` and is not silently transferred to a replacement tool. Conflicts at the same scope and specificity likewise require review.
 
-```text
-GTM PLUGIN | <server-id> | Follow the gpt-tunnel-manager-lifecycle skill before using this plugin
-```
+**Embedding Provider**:
+The separately configured service or compatible local endpoint used to generate Tool Catalog and search-query embeddings. Its credentials are distinct from the OpenAI Runtime API key used by the Manager Tunnel.
 
-The immutable Server ID is authoritative; plugin display names are informational only.
+**Tool Reference**:
+An opaque generation-bound reference returned by discovery and accepted by `get_tool` to identify one cataloged downstream tool without exposing routing internals as selectors.
 
-**Lifecycle Skill**  
-The separately installed generic ChatGPT Skill in `assets/lifecycle-skill/SKILL.md`. It reads a plugin's Lifecycle Marker, checks the Manager MCP, applies mode-specific lifecycle behavior, waits for Ready, and only then invokes the target plugin. It contains no registry of server-specific names or IDs.
+**Execution Handle**:
+An authenticated generation-bound capability minted by `get_tool` for one exact Authoritative Source Contract and expected Execution Class. It is required to execute the selected downstream tool.
 
-## Authentication and credential boundary
+**Execution Class**:
+One of the fixed upstream permission categories derived only from normalized downstream MCP ToolAnnotations. The class determines which Manager MCP executor may invoke a tool.
+_Avoid_: semantic permission, enrichment permission
 
-GPT Tunnel Manager v1 adds **no Manager-layer authentication** to the Manager MCP or participating server tunnels.
+## Transport and exposure
 
-- Each MCP server is responsible for any authentication its own service requires.
-- The Manager MCP is exposed to ChatGPT through its dedicated Secure MCP Tunnel without an additional Tunnel Manager OAuth/Auth Gateway.
-- Each server tunnel connects directly to its configured Stdio or HTTP target.
-- The OpenAI Runtime API key is a separate control-plane credential used only by `tunnel-client` to establish and operate Secure MCP Tunnels.
-- The known Manager Runtime API key uses a fixed internal secret reference, `secret://openai/runtime/default`. The native UI asks only for the key value.
-- Downstream tunnel runtimes inherit that Manager key by default; arbitrary secret references remain available for custom downstream secrets and environment values.
-- Runtime API keys and secret environment values are stored through platform secret storage or controlled environment overrides and never persisted as plaintext configuration values.
+**Transport Type**:
+How GPT Tunnel Manager connects to a Downstream MCP: Stdio, Managed HTTP, or External HTTP.
 
-## Portable Root
+**Stdio**:
+A Transport Type where GPT Tunnel Manager launches and owns the configured MCP process and communicates with it directly over MCP stdio.
 
-**Portable Root**  
-The writable directory under which Tunnel Manager keeps configuration, runtime data, managed `tunnel-client` versions, instance metadata, and optional logs. Windows/Linux use the executable's directory. macOS resolves to the directory containing the `.app` bundle when packaged that way. Tunnel Manager does not silently fall back to OS application-data directories.
+**Managed HTTP**:
+A Transport Type where GPT Tunnel Manager launches and owns the configured HTTP MCP process and connects to its configured MCP URL.
 
-## Native desktop shell
+**External HTTP**:
+A Transport Type where GPT Tunnel Manager connects to an independently owned MCP HTTP endpoint and never terminates that external service.
 
-The normal application uses Gio as its only management surface. There is no browser-based management UI.
+**Manager Tunnel**:
+The optional OpenAI Secure MCP Tunnel exposing only the Manager MCP to remote ChatGPT access. Downstream MCPs do not receive individual tunnels in v2.
+_Avoid_: per-server tunnel
 
-A notification-area/system-tray icon remains active while the Manager process is running. Minimize and close-to-tray remove the native window from the taskbar without shutting down tunnels or owned MCP processes. `Open Manager` creates/restores the native Gio window; explicit Exit performs coordinated shutdown.
+**Downstream Authentication**:
+Credentials or OAuth state used by GPT Tunnel Manager as an MCP client when a configured HTTP Downstream MCP requires authentication. This is separate from Manager-layer authentication and from the Manager Tunnel Runtime API key.
 
-A tiny loopback endpoint used only for single-instance ownership/focus handoff is an implementation detail and is not a management interface or tunneled MCP endpoint.
+**Local Manager Access Protection**:
+Optional installation-scoped capability-token protection for the loopback Manager MCP. It is enabled by default but may be disabled in native settings to intentionally permit unauthenticated local MCP access.
+_Avoid_: Manager OAuth, Auth Gateway
+
+**Portable Root**:
+The writable directory under which GPT Tunnel Manager stores configuration, runtime data, index data, managed tunnel-client versions, instance metadata, and optional logs.

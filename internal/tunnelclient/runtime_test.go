@@ -13,22 +13,6 @@ import (
 	"time"
 )
 
-func TestJoinCommand(t *testing.T) {
-	got := JoinCommand([]string{"python", "a b.py", "--x=1"})
-	if got != "python \"a b.py\" --x=1" {
-		t.Fatalf("%q", got)
-	}
-}
-
-func TestMeaningfulActivity(t *testing.T) {
-	if !meaningfulActivity(`{"component":"dispatcher","rpc_method":"tools/call"}`) {
-		t.Fatal("tools/call should count")
-	}
-	if meaningfulActivity(`{"component":"dispatcher","rpc_method":"initialize"}`) {
-		t.Fatal("initialize should not count")
-	}
-}
-
 type timeoutProcess struct {
 	grace time.Duration
 	done  chan struct{}
@@ -61,13 +45,44 @@ func TestReadinessTimeoutIncludesFirstLongPollGrace(t *testing.T) {
 	}
 }
 
+func TestRunArgsKeepManagerCapabilityOutOfArgv(t *testing.T) {
+	const authorization = "Bearer local-manager-capability"
+	args, env, err := runArgsEnv(RunSpec{
+		TunnelID:        "tunnel_0123456789abcdef0123456789abcdef",
+		APIKey:          "runtime-key",
+		MCPURL:          "http://127.0.0.1:12345/mcp",
+		MCPAuthorization: authorization,
+	}, "/tmp/health.url")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joinedArgs := strings.Join(args, "\x00")
+	if strings.Contains(joinedArgs, authorization) || strings.Contains(joinedArgs, "local-manager-capability") {
+		t.Fatalf("Manager capability leaked into argv: %q", joinedArgs)
+	}
+	if !strings.Contains(joinedArgs, "Authorization: env:"+managerMCPAuthorizationEnv) {
+		t.Fatalf("argv does not contain environment-backed Authorization header: %q", joinedArgs)
+	}
+	joinedEnv := strings.Join(env, "\x00")
+	if !strings.Contains(joinedEnv, managerMCPAuthorizationEnv+"="+authorization) {
+		t.Fatalf("Manager authorization missing from child environment: %q", joinedEnv)
+	}
+}
+
+func TestRunArgsRejectManagerAuthorizationLineBreaks(t *testing.T) {
+	_, _, err := runArgsEnv(RunSpec{MCPAuthorization: "Bearer value\r\nX-Evil: injected"}, "health.url")
+	if err == nil {
+		t.Fatal("expected Manager authorization with line breaks to be rejected")
+	}
+}
+
 func TestWaitReadyReturnsWhenTunnelClientExits(t *testing.T) {
-	process := &timeoutProcess{done: make(chan struct{}), err: errors.New("stdio MCP command exited")}
+	process := &timeoutProcess{done: make(chan struct{}), err: errors.New("Manager MCP target exited")}
 	close(process.done)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	started := time.Now()
-	_, err := waitReady(ctx, filepath.Join(t.TempDir(), "missing-health.url"), process, true)
+	_, err := waitReady(ctx, filepath.Join(t.TempDir(), "missing-health.url"), process)
 	if err == nil || !strings.Contains(err.Error(), "tunnel-client exited during startup") {
 		t.Fatalf("err=%v", err)
 	}
@@ -99,7 +114,7 @@ func TestWaitReadyRequiresSuccessfulControlPlanePoll(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	health, err := waitReady(ctx, urlFile, process, true)
+	health, err := waitReady(ctx, urlFile, process)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +146,7 @@ func TestWaitReadyRejectsLocalReadyWithoutControlPlanePoll(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 450*time.Millisecond)
 	defer cancel()
 
-	_, err := waitReady(ctx, urlFile, process, true)
+	_, err := waitReady(ctx, urlFile, process)
 	if err == nil || !strings.Contains(err.Error(), "no successful control-plane poll observed") {
 		t.Fatalf("err=%v", err)
 	}
