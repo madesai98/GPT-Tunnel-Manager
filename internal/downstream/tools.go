@@ -37,9 +37,19 @@ func SnapshotTools(ctx context.Context, session *mcp.ClientSession) (ToolSnapsho
 		}
 		tools = append(tools, tool)
 	}
-	fingerprint, canonical, err := toolcontract.FingerprintTools(tools)
+	// The first pass clones the SDK's wire representation into the exact Tool
+	// shape that the Manager persists in the authoritative catalog. Fingerprint
+	// that persisted shape on a second pass so a later catalog decode/re-encode
+	// produces the same aggregate server fingerprint. Without this stabilization,
+	// interface-backed nested schemas can serialize differently before and after
+	// one JSON round-trip and be mistaken for live contract drift.
+	_, canonical, err := toolcontract.FingerprintTools(tools)
 	if err != nil {
 		return ToolSnapshot{}, err
 	}
-	return ToolSnapshot{Tools: canonical, Fingerprint: fingerprint}, nil
+	fingerprint, stable, err := toolcontract.FingerprintTools(canonical)
+	if err != nil {
+		return ToolSnapshot{}, err
+	}
+	return ToolSnapshot{Tools: stable, Fingerprint: fingerprint}, nil
 }
