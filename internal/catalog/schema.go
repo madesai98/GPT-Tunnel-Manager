@@ -227,6 +227,15 @@ CREATE TABLE IF NOT EXISTS enrichment_batches (
 );
 CREATE INDEX IF NOT EXISTS enrichment_batches_pending
 ON enrichment_batches(generation_id, kind, accepted_fingerprint, batch_key);
+
+CREATE TABLE IF NOT EXISTS continuation_mappings (
+    mapping_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('task', 'resource')),
+    server_id TEXT NOT NULL,
+    payload BLOB NOT NULL,
+    created_at_unix_ms INTEGER NOT NULL,
+    expires_at_unix_ms INTEGER
+);
 `
 
 var requiredTables = []string{
