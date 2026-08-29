@@ -13,22 +13,6 @@ import (
 	"time"
 )
 
-func TestJoinCommand(t *testing.T) {
-	got := JoinCommand([]string{"python", "a b.py", "--x=1"})
-	if got != "python \"a b.py\" --x=1" {
-		t.Fatalf("%q", got)
-	}
-}
-
-func TestMeaningfulActivity(t *testing.T) {
-	if !meaningfulActivity(`{"component":"dispatcher","rpc_method":"tools/call"}`) {
-		t.Fatal("tools/call should count")
-	}
-	if meaningfulActivity(`{"component":"dispatcher","rpc_method":"initialize"}`) {
-		t.Fatal("initialize should not count")
-	}
-}
-
 type timeoutProcess struct {
 	grace time.Duration
 	done  chan struct{}
@@ -62,12 +46,12 @@ func TestReadinessTimeoutIncludesFirstLongPollGrace(t *testing.T) {
 }
 
 func TestWaitReadyReturnsWhenTunnelClientExits(t *testing.T) {
-	process := &timeoutProcess{done: make(chan struct{}), err: errors.New("stdio MCP command exited")}
+	process := &timeoutProcess{done: make(chan struct{}), err: errors.New("Manager MCP target exited")}
 	close(process.done)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	started := time.Now()
-	_, err := waitReady(ctx, filepath.Join(t.TempDir(), "missing-health.url"), process, true)
+	_, err := waitReady(ctx, filepath.Join(t.TempDir(), "missing-health.url"), process)
 	if err == nil || !strings.Contains(err.Error(), "tunnel-client exited during startup") {
 		t.Fatalf("err=%v", err)
 	}
@@ -99,7 +83,7 @@ func TestWaitReadyRequiresSuccessfulControlPlanePoll(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	health, err := waitReady(ctx, urlFile, process, true)
+	health, err := waitReady(ctx, urlFile, process)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +115,7 @@ func TestWaitReadyRejectsLocalReadyWithoutControlPlanePoll(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 450*time.Millisecond)
 	defer cancel()
 
-	_, err := waitReady(ctx, urlFile, process, true)
+	_, err := waitReady(ctx, urlFile, process)
 	if err == nil || !strings.Contains(err.Error(), "no successful control-plane poll observed") {
 		t.Fatalf("err=%v", err)
 	}
