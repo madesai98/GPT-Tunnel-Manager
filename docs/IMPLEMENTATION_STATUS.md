@@ -10,7 +10,7 @@ Date: 2026-08-28
 
 Branch: `feature/v2-mcp-router`
 
-Status: **implementation in progress; Phase 1 complete and Phase 2 is next**.
+Status: **implementation in progress; Phases 1 and 2 complete, Phase 3 next**.
 
 The canonical v2 implementation contract is `docs/V2_IMPLEMENTATION_PLAN.md`. `CONTEXT.md` and ADRs 0009 onward describe the accepted v2 architecture and supersede conflicting v1 topology assumptions where stated.
 
@@ -61,7 +61,29 @@ CI run `33205279379` completed successfully across tests, vet, headless cross-bu
 
 ### Phase 2 — clean v2 config/state foundation
 
-Next. Implement the strict v2-native schema, clean-start major cutover, stable Manager MCP port, embedding/auth/local-protection/profile settings, and routing/preference revision-state interfaces. No v1 conversion or compatibility parsing will be added.
+Complete through commit `253376478ac98613d3d6e408a999e070e2251873`.
+
+The v2-native foundation now provides:
+
+- strict v2-only manager/server schemas and validation with no v1 compatibility structs, aliases, conversion, or fallback parsing;
+- opaque one-major-version cutover handling for legacy `config/` and relevant `data/` bytes;
+- atomic fresh initialization of the `manager.json` + `servers.json` pair, with incomplete/half-created v2 configuration rejected fail-closed;
+- a stable persisted local Manager MCP port;
+- Local Manager Access Protection enabled by default with its generated capability token stored only in the secret store;
+- dedicated embedding/downstream credential references with no raw credential values in configuration;
+- deterministic `routing_state_hash`, monotonic diagnostic `routing_revision`, and independent `preference_revision` primitives;
+- installation-keyed HMAC fingerprints for routing-relevant secret values;
+- an explicit config/secret/routing-state coordinator that marks routing unready before routing-affecting writes and only re-enables it after persisted state is recomputed and reconciled;
+- startup reconciliation that detects a crash after a routing-affecting config or secret write and prevents an old semantic generation from being treated as current;
+- separation of routing-relevant static/environment secret changes and OAuth account/scope identity from operational embedding, Manager Tunnel, and routine OAuth token rotation.
+
+Phase 2 CI run `33229267135` completed successfully: `go mod tidy` produced zero diff, `go test ./...` and `go vet ./...` passed, all six headless cross-build targets passed, and native Linux/Windows/macOS GUI builds passed.
+
+Phase 2 exit gate is satisfied: fresh v2 configuration persists and validates atomically, released v1 configuration is not interpreted, and the fail-closed routing-state mutation boundary is in place before catalog persistence lands in Phase 4.
+
+### Phase 3 — direct downstream MCP clients
+
+Next. Implement `internal/downstream` for direct Stdio, Managed HTTP, and External HTTP MCP sessions, including secret-backed authentication, process ownership, bounded teardown, and full `tools/list` fingerprinting. Checkpoint B requires `Manager -> ListTools -> CallTool` to work for all three transports without per-server Secure MCP Tunnels or downstream `tunnel-client`.
 
 ## Clean v2 break
 
