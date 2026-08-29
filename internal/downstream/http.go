@@ -51,7 +51,7 @@ func (f *Factory) connectManagedHTTP(ctx context.Context, server v2config.Server
 	if err != nil {
 		return nil, err
 	}
-	session, err := client.Connect(ctx, transport, nil)
+	session, err := client.Connect(ctx, wrapTaskAwareTransport(transport), nil)
 	if err != nil {
 		return nil, fmt.Errorf("connect managed HTTP MCP %s: %w", server.ID, err)
 	}
