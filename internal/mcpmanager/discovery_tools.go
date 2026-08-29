@@ -127,9 +127,7 @@ func projectAuthoritativeTool(source discovery.AuthoritativeTool) (authoritative
 		return authoritativeToolOutput{}, errors.New("authoritative downstream tool contract is empty")
 	}
 	var tool any
-	decoder := json.NewDecoder(stringsNewReaderBytes(source.Tool))
-	decoder.UseNumber()
-	if err := decoder.Decode(&tool); err != nil {
+	if err := json.Unmarshal(source.Tool, &tool); err != nil {
 		return authoritativeToolOutput{}, fmt.Errorf("decode authoritative downstream tool contract: %w", err)
 	}
 	return authoritativeToolOutput{
@@ -140,10 +138,6 @@ func projectAuthoritativeTool(source discovery.AuthoritativeTool) (authoritative
 		Tool:               tool,
 	}, nil
 }
-
-// stringsNewReaderBytes keeps the JSON projection allocation local without
-// converting the authoritative source bytes through any alternate serializer.
-func stringsNewReaderBytes(body []byte) *bytes.Reader { return bytes.NewReader(body) }
 
 func discoverySearchFailure(err error) (*mcp.CallToolResult, searchToolsOutput, error) {
 	return &mcp.CallToolResult{IsError: true}, searchToolsOutput{Error: stableDiscoveryError(err)}, nil
