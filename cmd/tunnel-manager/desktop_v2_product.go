@@ -30,19 +30,19 @@ var v2ProductControls struct {
 	confirmExit     widget.Bool
 	exitOnClose     widget.Bool
 
-	managerCredential widget.Editor
-	saveGeneral       widget.Clickable
-	saveCredential    widget.Clickable
-	checkTunnelClient widget.Clickable
+	managerCredential  widget.Editor
+	saveGeneral        widget.Clickable
+	saveCredential     widget.Clickable
+	checkTunnelClient  widget.Clickable
 	updateTunnelClient widget.Clickable
-	selfUpdate        widget.Clickable
+	selfUpdate         widget.Clickable
 
-	logSearch     widget.Editor
-	logList       widget.List
-	logLevel      widget.Clickable
-	clearLogs     widget.Clickable
-	exportText    widget.Clickable
-	exportJSON    widget.Clickable
+	logSearch  widget.Editor
+	logList    widget.List
+	logLevel   widget.Clickable
+	clearLogs  widget.Clickable
+	exportText widget.Clickable
+	exportJSON widget.Clickable
 }
 
 func ensureV2ProductControls(u *v2DesktopUI) {
@@ -168,7 +168,9 @@ func v2ProductSettingsSection(u *v2DesktopUI, gtx layout.Context) layout.Dimensi
 		layout.Rigid(sectionTitle(u.th, "Manager Secure MCP Tunnel")),
 		layout.Rigid(mutedCaption(u.th, fmt.Sprintf("State: %s · credential: %s", tunnel.State, credential))),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			if tunnel.Error == "" { return layout.Dimensions{} }
+			if tunnel.Error == "" {
+				return layout.Dimensions{}
+			}
 			return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, mutedCaption(u.th, tunnel.Error))
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ProductControls.managerCredential, "Runtime API key (leave blank to keep current)")) }),
@@ -184,29 +186,43 @@ func v2ProductSettingsSection(u *v2DesktopUI, gtx layout.Context) layout.Dimensi
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, mutedCaption(u.th, selfUpdateCaption)) }),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, secondaryButton(u.th, &v2ProductControls.selfUpdate, "Update GPT Tunnel Manager")) }),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return v2AdvancedSettingsSection(u, gtx) }),
 	)
 }
 
 func v2LevelRank(level logging.Level) int {
 	switch level {
-	case logging.Trace: return 0
-	case logging.Debug: return 1
-	case logging.Info: return 2
-	case logging.Warn: return 3
-	case logging.Error: return 4
-	default: return 2
+	case logging.Trace:
+		return 0
+	case logging.Debug:
+		return 1
+	case logging.Info:
+		return 2
+	case logging.Warn:
+		return 3
+	case logging.Error:
+		return 4
+	default:
+		return 2
 	}
 }
 
 func v2DisplayRank(value string) int {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "all": return -1
-	case "trace": return 0
-	case "debug": return 1
-	case "info": return 2
-	case "warn": return 3
-	case "error": return 4
-	default: return 2
+	case "all":
+		return -1
+	case "trace":
+		return 0
+	case "debug":
+		return 1
+	case "info":
+		return 2
+	case "warn":
+		return 3
+	case "error":
+		return 4
+	default:
+		return 2
 	}
 }
 
@@ -255,14 +271,18 @@ func v2LogsPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 	for v2ProductControls.exportText.Clicked(gtx) {
 		u.async("exporting text logs", func() error {
 			path, err := u.core.ExportLogs("text")
-			if err == nil { u.setMessage("Logs exported: " + path) }
+			if err == nil {
+				u.setMessage("Logs exported: " + path)
+			}
 			return err
 		})
 	}
 	for v2ProductControls.exportJSON.Clicked(gtx) {
 		u.async("exporting JSONL logs", func() error {
 			path, err := u.core.ExportLogs("jsonl")
-			if err == nil { u.setMessage("Logs exported: " + path) }
+			if err == nil {
+				u.setMessage("Logs exported: " + path)
+			}
 			return err
 		})
 	}
