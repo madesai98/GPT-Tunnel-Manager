@@ -187,8 +187,8 @@ func validateAmbiguity(proposal AmbiguityProposal, known map[string]struct{}) er
 		}
 		seen[member] = struct{}{}
 		details, ok := proposal.ProsCons[member]
-		if !ok || len(details.Pros) == 0 || len(details.Cons) == 0 {
-			return fmt.Errorf("ambiguity review requires pros and cons for %q", member)
+		if !ok || len(details.Pros)+len(details.Cons) == 0 {
+			return fmt.Errorf("ambiguity review requires source-grounded pros or cons for %q", member)
 		}
 	}
 	return nil
