@@ -2,7 +2,10 @@ package mcpmanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/catalog"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/indexing"
@@ -28,9 +31,28 @@ type indexGetBatchInput struct {
 	Limit int                         `json:"limit,omitempty" jsonschema:"Maximum number of immutable pending work items to return. Defaults to 1."`
 }
 
+// indexEnrichmentBatch is the MCP-facing projection of a persisted enrichment
+// batch. The catalog intentionally stores request/accepted-response bodies as
+// json.RawMessage, but reflecting RawMessage directly into an MCP output schema
+// describes it as []byte (an array). On the wire these fields are arbitrary JSON
+// values, so decode them before handing the object to the typed MCP tool layer.
+type indexEnrichmentBatch struct {
+	ID                   string                      `json:"batch_id"`
+	GenerationID         string                      `json:"generation_id"`
+	Kind                 catalog.EnrichmentBatchKind `json:"kind"`
+	BatchKey             string                      `json:"batch_key"`
+	Required             bool                        `json:"required"`
+	RequestFingerprint   string                      `json:"request_fingerprint"`
+	Request              any                         `json:"request" jsonschema:"Immutable enrichment request JSON for the declared batch protocol."`
+	AcceptedFingerprint  string                      `json:"accepted_fingerprint,omitempty"`
+	AcceptedResponse     any                         `json:"accepted_response,omitempty" jsonschema:"Previously accepted agent response JSON, when this batch has already been accepted."`
+	CreatedAt            time.Time                   `json:"created_at"`
+	AcceptedAt           *time.Time                  `json:"accepted_at,omitempty"`
+}
+
 type indexGetBatchOutput struct {
-	Batches []catalog.EnrichmentBatch `json:"batches,omitempty"`
-	Error   *toolError                 `json:"error,omitempty"`
+	Batches []indexEnrichmentBatch `json:"batches,omitempty"`
+	Error   *toolError              `json:"error,omitempty"`
 }
 
 type indexSubmitBatchInput struct {
@@ -39,9 +61,9 @@ type indexSubmitBatchInput struct {
 }
 
 type indexSubmitBatchOutput struct {
-	Batch      *catalog.EnrichmentBatch `json:"batch,omitempty"`
-	Idempotent bool                     `json:"idempotent,omitempty"`
-	Error      *toolError               `json:"error,omitempty"`
+	Batch      *indexEnrichmentBatch `json:"batch,omitempty"`
+	Idempotent bool                  `json:"idempotent,omitempty"`
+	Error      *toolError            `json:"error,omitempty"`
 }
 
 type indexCommitOutput struct {
@@ -97,7 +119,11 @@ func registerV2IndexTools(server *mcp.Server, service *indexing.Service) {
 		if err != nil {
 			return indexBatchFailure(err)
 		}
-		return nil, indexGetBatchOutput{Batches: batches}, nil
+		projected, err := projectIndexBatches(batches)
+		if err != nil {
+			return indexBatchFailure(err)
+		}
+		return nil, indexGetBatchOutput{Batches: projected}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -112,7 +138,10 @@ func registerV2IndexTools(server *mcp.Server, service *indexing.Service) {
 		if err != nil {
 			return indexSubmitFailure(err)
 		}
-		batch := result.Batch
+		batch, err := projectIndexBatch(result.Batch)
+		if err != nil {
+			return indexSubmitFailure(err)
+		}
 		return nil, indexSubmitBatchOutput{Batch: &batch, Idempotent: result.Idempotent}, nil
 	})
 
@@ -130,6 +159,56 @@ func registerV2IndexTools(server *mcp.Server, service *indexing.Service) {
 		}
 		return nil, indexCommitOutput{Result: &result}, nil
 	})
+}
+
+func projectIndexBatches(batches []catalog.EnrichmentBatch) ([]indexEnrichmentBatch, error) {
+	projected := make([]indexEnrichmentBatch, 0, len(batches))
+	for _, batch := range batches {
+		item, err := projectIndexBatch(batch)
+		if err != nil {
+			return nil, err
+		}
+		projected = append(projected, item)
+	}
+	return projected, nil
+}
+
+func projectIndexBatch(batch catalog.EnrichmentBatch) (indexEnrichmentBatch, error) {
+	request, err := decodeIndexJSONValue(batch.RequestJSON, "request", batch.ID)
+	if err != nil {
+		return indexEnrichmentBatch{}, err
+	}
+	var accepted any
+	if len(batch.AcceptedResponseJSON) != 0 {
+		accepted, err = decodeIndexJSONValue(batch.AcceptedResponseJSON, "accepted response", batch.ID)
+		if err != nil {
+			return indexEnrichmentBatch{}, err
+		}
+	}
+	return indexEnrichmentBatch{
+		ID: batch.ID,
+		GenerationID: batch.GenerationID,
+		Kind: batch.Kind,
+		BatchKey: batch.BatchKey,
+		Required: batch.Required,
+		RequestFingerprint: batch.RequestFingerprint,
+		Request: request,
+		AcceptedFingerprint: batch.AcceptedFingerprint,
+		AcceptedResponse: accepted,
+		CreatedAt: batch.CreatedAt,
+		AcceptedAt: batch.AcceptedAt,
+	}, nil
+}
+
+func decodeIndexJSONValue(body json.RawMessage, field, batchID string) (any, error) {
+	if len(body) == 0 {
+		return nil, fmt.Errorf("enrichment batch %s has empty %s JSON", batchID, field)
+	}
+	var value any
+	if err := json.Unmarshal(body, &value); err != nil {
+		return nil, fmt.Errorf("decode enrichment batch %s %s JSON: %w", batchID, field, err)
+	}
+	return value, nil
 }
 
 func indexStatusFailure(err error) (*mcp.CallToolResult, indexStatusOutput, error) {
