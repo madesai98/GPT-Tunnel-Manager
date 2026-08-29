@@ -73,7 +73,7 @@ func TestSearchCanReturnZeroResultsAndFailsClosedWithoutCurrentIndex(t *testing.
 }
 
 func TestExplicitProfilePrecedenceAndMissingProfile(t *testing.T) {
-	service, cat, prefs, handles, provider := buildDiscoveryFixture(t)
+	_, cat, prefs, handles, provider := buildDiscoveryFixture(t)
 	ctx := context.Background()
 	sources, err := cat.SourceTools(ctx, "gen_phase7")
 	if err != nil {
