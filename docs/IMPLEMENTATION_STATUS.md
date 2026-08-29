@@ -10,7 +10,7 @@ Date: 2026-08-29
 
 Branch: `feature/v2-mcp-router`
 
-Status: **implementation in progress; Phases 1–10 complete, Phase 11 next**.
+Status: **implementation in progress; Phases 1–11 complete, Phase 12 next**.
 
 The canonical v2 implementation contract is `docs/V2_IMPLEMENTATION_PLAN.md`. `CONTEXT.md` and ADRs 0009 onward describe the accepted v2 architecture and supersede conflicting v1 topology assumptions where stated.
 
@@ -299,6 +299,28 @@ Focused Phase 10 integration coverage uses a real modern MCP client and raw lega
 Phase 10 implementation CI run `33272556036` completed successfully on `11f4ced1f78c7658e16f199a5636a2851a68b805`: committed module-graph verification produced zero diff, `go test ./...` passed including the new canonical upstream integration workflow, the dedicated Phase 7 discovery quality gate remained green, `go vet ./...` passed, the retrieval-scale benchmark step passed, native Linux/Windows/macOS GUI builds passed, Windows process/DPAPI checks passed, and all six headless `CGO_ENABLED=0` cross-build targets passed.
 
 Phase 10 exit gate is satisfied at the implementation level: representative modern and legacy upstream clients see the stable 19-tool Manager contract and complete tool workflows, protocol-required task/resource/callback continuations remain routed through Manager-owned mappings and lifecycle leases, local access protection/Origin rejection is enforced at the one-URL boundary, and the integration client exercises the real catalog/index/discovery/execution path rather than registration-only mocks. Phase 11 native UI/bootstrap migration has not been started as part of Phase 10.
+
+### Phase 11 — native desktop migration
+
+Complete through implementation commit `a15f84a0cf63f6ca38e50a4d581d1b2ea2a9c44c`.
+
+The executable bootstrap, `internal/app.V2App` facade, native Gio desktop modules, and v2 product-runtime services now provide:
+
+- canonical v2 startup for both desktop and headless execution, including opaque legacy cutover, direct construction of the Phase 3–10 catalog/routing/lifecycle/indexing/Manager MCP stack, and no runtime fallback through the v1 `App` bootstrap;
+- one native v2 desktop surface for Server Entries using immutable generated `srv_<32 hex>` IDs, all four lifecycle modes (`Always On`, `Managed`, `Manual`, `Disabled`), and all three downstream transports (Stdio, Managed HTTP, External HTTP);
+- user-facing HTTP authentication workflows for none/OAuth/static authentication, explicit OAuth connect/reconnect/disconnect behavior, static-header credentials and environment secrets written through generated secret references, and no requirement for users to type or manage `secret://` references directly;
+- explicit server start/stop/restart controls and live running/active-call state backed by the router-native Phase 9 lifecycle service rather than per-server tunnel or lifecycle-skill controls;
+- embedding-provider configuration including base URL, model, optional dimensions, and credential entry, plus query-embedding cache and Managed default-idle configuration through the validated v2 Manager schema;
+- explicit Index status, refresh, and commit controls with visible pending-required/open-review blockers, agent-enrichment batch visibility, and backend-defined structured Ambiguity Review resolution using the Phase 6 request/response contract;
+- Routing Profile creation/deletion/default selection and Routing Preference creation/confirmation/deletion using authoritative tool targets and current assumption fingerprints, all through optimistic `preference_revision` semantics with `needs_review` surfaced natively;
+- Local Manager port and capability-protection settings, with the single optional Manager Secure MCP Tunnel configured separately using its canonical runtime credential reference and no downstream Tunnel IDs, OpenAI API keys, Developer Plugin setup, marker, or lifecycle-skill UX;
+- a v2 product-runtime adapter preserving structured log capture/filter/clear/export, launch-at-startup application, tray/start-minimized/close-to-tray/confirm-exit behavior, tunnel-client install/update/rollback support for the Manager Tunnel only, and the existing staged application self-update flow;
+- complete editable v2 Manager settings for native behavior, logging capture/display/disk rotation, tunnel-client channel/binary/update cadence, appearance theme, local Manager, embedding/index/Managed defaults, and Manager Tunnel state without JSON editing;
+- focused facade coverage for generated valid Server IDs, all three transport configuration shapes, OAuth/static/environment-secret indirection, full Manager-schema persistence, and secret-redacted logging/export behavior.
+
+Phase 11 first exit-gate CI run `33276157337` completed successfully on `a15f84a0cf63f6ca38e50a4d581d1b2ea2a9c44c`: committed module-graph verification produced zero diff, `go test ./...` passed including the Phase 11 facade coverage, the dedicated Phase 7 discovery quality gate remained green, `go vet ./...` passed, the retrieval-scale benchmark step passed, native Linux/Windows/macOS GUI builds passed, Windows process/DPAPI checks passed, and all six headless `CGO_ENABLED=0` cross-build targets passed.
+
+Phase 11 exit-gate implementation requirements are satisfied: a fresh v2 user can manage the v2 Manager configuration, downstream Server Entries/authentication, embedding/index workflows, Ambiguity Reviews, and Routing Profiles/Preferences through native UI without manually editing JSON or secret references; the desktop/headless executable paths start the v2 bootstrap directly; and native tray/logging/update behavior remains available without reintroducing per-server tunnel/plugin/marker topology. Phase 12 remains the owner of deleting/retiring the old v1 topology packages and unreachable legacy desktop implementation.
 
 ## Clean v2 break
 
