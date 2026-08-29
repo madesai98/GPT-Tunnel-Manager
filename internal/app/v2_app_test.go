@@ -2,15 +2,20 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/routingprefs"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/v2config"
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/v2state"
 )
 
 func TestV2AppFreshNativeFacade(t *testing.T) {
+	setHeadlessInternalSecrets(t)
 	root := t.TempDir()
 	application, err := NewV2App(t.Context(), root)
 	if err != nil {
@@ -78,6 +83,7 @@ func TestV2AppFreshNativeFacade(t *testing.T) {
 }
 
 func TestV2AppOpaqueLegacyCutover(t *testing.T) {
+	setHeadlessInternalSecrets(t)
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "config"), 0o700); err != nil {
 		t.Fatal(err)
@@ -112,4 +118,17 @@ func TestV2AppOpaqueLegacyCutover(t *testing.T) {
 	if string(body) != string(legacyBody) {
 		t.Fatalf("legacy config content was modified during cutover")
 	}
+}
+
+func setHeadlessInternalSecrets(t *testing.T) {
+	t.Helper()
+	setHeadlessSecret(t, v2state.RoutingFingerprintKeySecretRef, strings.Repeat("r", 32))
+	setHeadlessSecret(t, v2config.LocalManagerCapabilitySecretRef, strings.Repeat("c", 32))
+}
+
+func setHeadlessSecret(t *testing.T, ref, value string) {
+	t.Helper()
+	hash := sha256.Sum256([]byte(ref))
+	name := "GTM_SECRET_" + strings.ToUpper(hex.EncodeToString(hash[:8]))
+	t.Setenv(name, value)
 }
