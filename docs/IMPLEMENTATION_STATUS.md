@@ -10,7 +10,7 @@ Date: 2026-08-28
 
 Branch: `feature/v2-mcp-router`
 
-Status: **implementation in progress; Phases 1 and 2 complete, Phase 3 next**.
+Status: **implementation in progress; Phases 1–3 complete, Phase 4 next**.
 
 The canonical v2 implementation contract is `docs/V2_IMPLEMENTATION_PLAN.md`. `CONTEXT.md` and ADRs 0009 onward describe the accepted v2 architecture and supersede conflicting v1 topology assumptions where stated.
 
@@ -83,7 +83,29 @@ Phase 2 exit gate is satisfied: fresh v2 configuration persists and validates at
 
 ### Phase 3 — direct downstream MCP clients
 
-Next. Implement `internal/downstream` for direct Stdio, Managed HTTP, and External HTTP MCP sessions, including secret-backed authentication, process ownership, bounded teardown, and full `tools/list` fingerprinting. Checkpoint B requires `Manager -> ListTools -> CallTool` to work for all three transports without per-server Secure MCP Tunnels or downstream `tunnel-client`.
+Complete through commit `407935c0dce1c7b8e3416bf7de85115089395c1d`.
+
+`internal/downstream` now provides:
+
+- direct Stdio MCP sessions with exclusive stdin/stdout protocol ownership, executable+argv spawning, cwd/environment/secret injection, stderr-only logging/redaction, Unix process-group ownership, Windows process-tree ownership, and bounded graceful/forced teardown;
+- Managed HTTP sessions where the Manager-owned process and direct MCP client are one lifetime unit and process exit is surfaced fail-closed;
+- External HTTP sessions that connect/close without taking ownership of the remote service;
+- secret-backed static Authorization/API headers and downstream OAuth handler integration scoped by immutable Server ID;
+- existing v2 HTTPS/insecure-override validation enforced before connection;
+- complete paginated `tools/list` snapshots and deterministic full-contract fingerprints;
+- immediate tool-contract invalidation on advertised list-change notifications and pre-call fingerprint revalidation for servers that do not advertise reliable notifications;
+- narrow Tasks extension registration on the official SDK client rather than a second protocol implementation;
+- panic-contained diagnostic/log callbacks and secret redaction for child-process logs.
+
+Checkpoint B integration coverage performs real `ListTools -> CallTool` flows over all three transports without a per-server Secure MCP Tunnel or downstream `tunnel-client`. Additional tests cover static authentication, OAuth authorize/retry, server-scoped OAuth state, environment-secret injection, log redaction, tool-contract invalidation, and owned-process teardown.
+
+CI run `33229784822` completed successfully after correcting requested Stdio EOF teardown semantics: `go mod tidy` produced zero diff, `go test ./...` and `go vet ./...` passed, all six headless cross-build targets passed, and native Linux/Windows/macOS GUI builds passed.
+
+Phase 3 exit gate is satisfied: arbitrary test MCPs can be listed and called safely through the Manager's direct downstream client layer with no per-server `tunnel-client`.
+
+### Phase 4 — catalog, generations, and routing state
+
+Next. Implement the Portable-Root-local SQLite catalog for authoritative source contracts, content fingerprints, active/staging generations, persistent staging resume, dirty partitions, dependency/neighborhood hashes, integrity validation/quarantine, and atomic generation promotion tied to the Phase 2 routing-state hash contract.
 
 ## Clean v2 break
 
