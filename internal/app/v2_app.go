@@ -65,6 +65,7 @@ type V2App struct {
 	tracker     *routingstate.Tracker
 	state       *v2state.Coordinator
 	routing     *v2RoutingAdapter
+	product     *v2ProductRuntime
 
 	manager v2config.ManagerConfig
 	servers v2config.ServersConfig
@@ -95,6 +96,11 @@ func NewV2App(parent context.Context, root string) (*V2App, error) {
 	a := &V2App{ctx: ctx, cancel: cancel, root: root, configStore: v2config.NewStore(root), secrets: secrets.New(root)}
 	fail := func(err error) (*V2App, error) {
 		cancel()
+		if a.product != nil {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = a.product.close(cleanupCtx)
+			cleanupCancel()
+		}
 		if a.catalog != nil {
 			_ = a.catalog.Close()
 		}
@@ -127,9 +133,15 @@ func NewV2App(parent context.Context, root string) (*V2App, error) {
 	if err != nil {
 		return fail(err)
 	}
+	manager.ManagerTunnel.RuntimeCredentialRef = v2config.ManagerRuntimeCredentialRef
 	a.manager = cloneManagerConfig(manager)
 	a.servers = cloneServersConfig(serversConfig)
 	a.routing = &v2RoutingAdapter{tracker: tracker, coordinator: state}
+	product, err := newV2ProductRuntime(root, manager)
+	if err != nil {
+		return fail(err)
+	}
+	a.product = product
 
 	provider, err := embedding.NewProvider(manager.Embedding, a.secrets, nil)
 	if err != nil {
@@ -158,6 +170,11 @@ func NewV2App(parent context.Context, root string) (*V2App, error) {
 
 	factory, err := downstream.NewFactory(downstream.Options{
 		Secrets: a.secrets,
+		Log: func(line downstream.LogLine) {
+			if a.product != nil {
+				a.product.logDownstream(line.ServerID, line.Stream, line.Text)
+			}
+		},
 		OnToolContractChanged: func(serverID string) {
 			if err := c.MarkDirty(context.Background(), "server:"+serverID, "live downstream tool contract changed", ""); err == nil {
 				_, _ = tracker.AdvanceRoutingRevision(context.Background())
@@ -167,13 +184,13 @@ func NewV2App(parent context.Context, root string) (*V2App, error) {
 	if err != nil {
 		return fail(err)
 	}
-	lifecycle, err := routedlifecycle.New(ctx, manager, serversConfig, routedlifecycle.ConnectWithFactory(factory), routedlifecycle.Options{})
+	lifecycleService, err := routedlifecycle.New(ctx, manager, serversConfig, routedlifecycle.ConnectWithFactory(factory), routedlifecycle.Options{})
 	if err != nil {
 		return fail(err)
 	}
-	a.lifecycle = lifecycle
-	state.SetServerMutationCoordinator(lifecycle)
-	indexService, err := indexing.NewService(c, coordinator, liveProvider, lifecycle, a.routing, serversConfig)
+	a.lifecycle = lifecycleService
+	state.SetServerMutationCoordinator(lifecycleService)
+	indexService, err := indexing.NewService(c, coordinator, liveProvider, lifecycleService, a.routing, serversConfig)
 	if err != nil {
 		return fail(err)
 	}
@@ -250,11 +267,15 @@ func (a *V2App) Start(ctx context.Context) error {
 		return err
 	}
 	a.started = true
-	lifecycle := a.lifecycle
+	lifecycleService := a.lifecycle
+	product := a.product
 	a.mu.Unlock()
 	// A downstream outage must not take the Manager itself offline. Always On
 	// maintenance remains owned by routedlifecycle and can recover independently.
-	_ = lifecycle.StartAlwaysOn(ctx)
+	_ = lifecycleService.StartAlwaysOn(ctx)
+	if product != nil {
+		product.start(a)
+	}
 	return nil
 }
 
@@ -265,18 +286,22 @@ func (a *V2App) Close() error {
 	a.cancel()
 	a.mu.Lock()
 	server := a.mcp
-	lifecycle := a.lifecycle
+	lifecycleService := a.lifecycle
 	c := a.catalog
+	product := a.product
 	a.started = false
 	a.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	var joined error
+	if product != nil {
+		joined = errors.Join(joined, product.close(ctx))
+	}
 	if server != nil {
 		joined = errors.Join(joined, server.Shutdown(ctx))
 	}
-	if lifecycle != nil {
-		joined = errors.Join(joined, lifecycle.Close(ctx))
+	if lifecycleService != nil {
+		joined = errors.Join(joined, lifecycleService.Close(ctx))
 	}
 	if c != nil {
 		joined = errors.Join(joined, c.Close())
@@ -325,6 +350,7 @@ func (a *V2App) ManagerSnapshot() V2ManagerSnapshot {
 }
 
 func (a *V2App) SaveManager(ctx context.Context, next v2config.ManagerConfig) error {
+	next.ManagerTunnel.RuntimeCredentialRef = v2config.ManagerRuntimeCredentialRef
 	if err := v2config.ValidateManager(next); err != nil {
 		return err
 	}
@@ -332,11 +358,21 @@ func (a *V2App) SaveManager(ctx context.Context, next v2config.ManagerConfig) er
 	if err != nil {
 		return err
 	}
+	old := a.ManagerConfig()
+	rollback := func() {}
+	if a.product != nil {
+		rollback, err = a.product.prepareManagerChange(ctx, old, next)
+		if err != nil {
+			return err
+		}
+	}
+
 	a.mu.Lock()
 	oldServer := a.mcp
 	wasStarted := a.started
 	if _, err := a.state.SaveManager(ctx, next); err != nil {
 		a.mu.Unlock()
+		rollback()
 		return err
 	}
 	if err := a.embedding.Swap(provider); err != nil {
@@ -362,6 +398,9 @@ func (a *V2App) SaveManager(ctx context.Context, next v2config.ManagerConfig) er
 	}
 	a.manager = cloneManagerConfig(next)
 	a.mu.Unlock()
+	if a.product != nil {
+		a.product.managerChanged(a, old, next)
+	}
 	return nil
 }
 
@@ -376,6 +415,9 @@ func (a *V2App) SetEmbedding(ctx context.Context, cfg v2config.EmbeddingConfig, 
 	if len(credential) != 0 {
 		if _, err := a.state.PutSecret(ctx, cfg.CredentialRef, append([]byte(nil), credential...)); err != nil {
 			return err
+		}
+		if a.product != nil {
+			a.product.log.Redactor().Register(credential)
 		}
 	}
 	manager := a.ManagerConfig()
@@ -402,6 +444,9 @@ func (a *V2App) PutStaticAuthSecret(ctx context.Context, serverID string, value 
 		return "", errors.New("server id and static credential are required")
 	}
 	_, err := a.state.PutSecret(ctx, ref, append([]byte(nil), value...))
+	if err == nil && a.product != nil {
+		a.product.log.Redactor().Register(value)
+	}
 	return ref, err
 }
 
@@ -411,6 +456,9 @@ func (a *V2App) PutEnvironmentSecret(ctx context.Context, serverID, name string,
 	}
 	ref := EnvironmentSecretRef(serverID, name)
 	_, err := a.state.PutSecret(ctx, ref, append([]byte(nil), value...))
+	if err == nil && a.product != nil {
+		a.product.log.Redactor().Register(value)
+	}
 	return ref, err
 }
 
@@ -427,6 +475,9 @@ func (a *V2App) SaveServers(ctx context.Context, next v2config.ServersConfig) er
 	a.mu.Lock()
 	a.servers = cloneServersConfig(next)
 	a.mu.Unlock()
+	if a.product != nil {
+		a.product.log.Log("info", "Manager", "Configuration", "server configuration saved", map[string]any{"server_count": len(next.Servers)})
+	}
 	return nil
 }
 
