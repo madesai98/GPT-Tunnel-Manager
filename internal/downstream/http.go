@@ -112,10 +112,11 @@ func (f *Factory) httpClientTransport(ctx context.Context, server v2config.Serve
 		if cfg.OAuth == nil {
 			return nil, errors.New("OAuth HTTP auth configuration is missing")
 		}
-		if f.oauth == nil {
-			return nil, fmt.Errorf("OAuth handler provider is required for server %s", server.ID)
+		provider := f.oauth
+		if provider == nil {
+			provider = NewNativeOAuthProvider(f.secrets)
 		}
-		handler, err := f.oauth.Handler(ctx, server.ID, *cfg.OAuth)
+		handler, err := provider.Handler(ctx, server.ID, *cfg.OAuth)
 		if err != nil {
 			return nil, fmt.Errorf("create OAuth handler for %s: %w", server.ID, err)
 		}
