@@ -26,6 +26,8 @@ jobs:
         run: go test ./...
       - name: Vet
         run: go vet ./...
+      - name: Retrieval scale benchmarks
+        run: go test ./internal/retrieval -run '^$' -bench 'Benchmark(ExactCosineSearch|LexicalSearch)' -benchmem -benchtime=200ms
 
   native-gui-build:
     strategy:
