@@ -64,10 +64,16 @@ type v2DesktopUI struct {
 	embeddingKey    widget.Editor
 	saveSettings    widget.Clickable
 
-	mu      sync.RWMutex
-	busy    bool
-	message string
-	exiting bool
+	confirmingExit bool
+	dontAskAgain   widget.Bool
+	cancelExit     widget.Clickable
+	confirmExit    widget.Clickable
+
+	mu           sync.RWMutex
+	busy         bool
+	message      string
+	exiting      bool
+	windowHidden bool
 
 	showReq  chan struct{}
 	trayStop chan struct{}
@@ -97,21 +103,25 @@ func runDesktopV2(core *coreapp.V2App, setFocus func(func())) error {
 		systray.Quit()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "desktop:", err)
+			os.Exit(1)
 		}
+		os.Exit(0)
 	}()
 	gioapp.Main()
 	return nil
 }
 
 func newV2DesktopUI(core *coreapp.V2App) *v2DesktopUI {
+	cfg := core.ManagerConfig()
 	u := &v2DesktopUI{
-		core:       core,
-		th:         material.NewTheme(),
-		page:       "servers",
-		list:       widget.List{List: layout.List{Axis: layout.Vertical}},
-		serverRows: make(map[string]*v2ServerActions),
-		showReq:    make(chan struct{}, 1),
-		trayStop:   make(chan struct{}),
+		core:         core,
+		th:           material.NewTheme(),
+		page:         "servers",
+		list:         widget.List{List: layout.List{Axis: layout.Vertical}},
+		serverRows:   make(map[string]*v2ServerActions),
+		windowHidden: cfg.General.StartMinimized,
+		showReq:      make(chan struct{}, 1),
+		trayStop:     make(chan struct{}),
 	}
 	u.th.Shaper = text.NewShaper(text.WithCollection(gofont.Collection()))
 	u.managerTunnelID.SingleLine = true
@@ -131,9 +141,36 @@ func (u *v2DesktopUI) loadSettings() {
 	u.embeddingBase.SetText(cfg.Embedding.BaseURL)
 	u.embeddingModel.SetText(cfg.Embedding.Model)
 	u.embeddingKey.SetText("")
+	ensureV2ProductControls(u)
 }
 
 func (u *v2DesktopUI) loop() error {
+	for {
+		u.mu.RLock()
+		hidden := u.windowHidden
+		exiting := u.exiting
+		u.mu.RUnlock()
+		if exiting {
+			<-u.core.Done()
+			return nil
+		}
+		if hidden {
+			select {
+			case <-u.core.Done():
+				return nil
+			case <-u.showReq:
+				u.mu.Lock()
+				u.windowHidden = false
+				u.mu.Unlock()
+			}
+		}
+		if err := u.runWindow(); err != nil {
+			return err
+		}
+	}
+}
+
+func (u *v2DesktopUI) runWindow() error {
 	win := new(gioapp.Window)
 	win.Option(
 		gioapp.Title("GPT Tunnel Manager"),
@@ -145,7 +182,9 @@ func (u *v2DesktopUI) loop() error {
 	u.mu.Unlock()
 	defer func() {
 		u.mu.Lock()
-		u.win = nil
+		if u.win == win {
+			u.win = nil
+		}
 		u.mu.Unlock()
 	}()
 
@@ -174,6 +213,27 @@ func (u *v2DesktopUI) loop() error {
 			if event.Err != nil {
 				return event.Err
 			}
+			u.mu.RLock()
+			exiting := u.exiting
+			u.mu.RUnlock()
+			if exiting {
+				return nil
+			}
+			select {
+			case <-u.core.Done():
+				return nil
+			default:
+			}
+			cfg := u.core.ManagerConfig()
+			if cfg.General.CloseBehavior == "minimize" || cfg.General.MinimizeToTray {
+				u.mu.Lock()
+				u.windowHidden = true
+				u.mu.Unlock()
+				return nil
+			}
+			u.mu.Lock()
+			u.windowHidden = true
+			u.mu.Unlock()
 			u.requestExit()
 			return nil
 		case gioapp.FrameEvent:
@@ -197,6 +257,12 @@ func (u *v2DesktopUI) invalidate() {
 }
 
 func (u *v2DesktopUI) showWindow() {
+	u.mu.RLock()
+	exiting := u.exiting
+	u.mu.RUnlock()
+	if exiting {
+		return
+	}
 	select {
 	case u.showReq <- struct{}{}:
 	default:
@@ -205,14 +271,31 @@ func (u *v2DesktopUI) showWindow() {
 }
 
 func (u *v2DesktopUI) requestExit() {
+	cfg := u.core.ManagerConfig()
+	if cfg.General.ConfirmExit {
+		u.mu.Lock()
+		if !u.exiting {
+			u.confirmingExit = true
+			u.windowHidden = false
+		}
+		u.mu.Unlock()
+		u.showWindow()
+		return
+	}
+	u.shutdownNow()
+}
+
+func (u *v2DesktopUI) shutdownNow() {
 	u.mu.Lock()
 	if u.exiting {
 		u.mu.Unlock()
 		return
 	}
 	u.exiting = true
+	u.confirmingExit = false
 	u.message = "Shutting down…"
 	u.mu.Unlock()
+	u.invalidate()
 	u.core.RequestShutdown()
 }
 
@@ -231,12 +314,19 @@ func (u *v2DesktopUI) async(label string, fn func() error) {
 		u.busy = false
 		if err != nil {
 			u.message = err.Error()
-		} else {
+		} else if u.message == label {
 			u.message = "Done: " + label
 		}
 		u.mu.Unlock()
 		u.invalidate()
 	}()
+}
+
+func (u *v2DesktopUI) setMessage(message string) {
+	u.mu.Lock()
+	u.message = message
+	u.mu.Unlock()
+	u.invalidate()
 }
 
 func (u *v2DesktopUI) layout(gtx layout.Context) layout.Dimensions {
@@ -294,12 +384,18 @@ func (u *v2DesktopUI) sidebar(gtx layout.Context) layout.Dimensions {
 }
 
 func (u *v2DesktopUI) mainArea(gtx layout.Context) layout.Dimensions {
+	u.mu.RLock()
+	confirmingExit := u.confirmingExit
+	u.mu.RUnlock()
+	if confirmingExit {
+		return u.exitDialog(gtx)
+	}
 	title, subtitle := "Servers", "Manage downstream MCP runtimes through the router-native lifecycle."
 	switch u.page {
 	case "index": title, subtitle = "Index", "Build and promote the routing catalog for the current routing state."
 	case "routing": title, subtitle = "Routing", "Inspect routing profiles, preference revisions, and review state."
-	case "settings": title, subtitle = "Settings", "Configure local Manager protection, tunnel exposure, and embeddings."
-	case "logs": title, subtitle = "Logs", "Native v2 operational logging surface."
+	case "settings": title, subtitle = "Settings", "Configure local Manager protection, tunnel exposure, embeddings, and native behavior."
+	case "logs": title, subtitle = "Logs", "Filter, inspect, clear, and export structured v2 runtime logs."
 	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(pageTitle(u.th, title)),
@@ -307,6 +403,43 @@ func (u *v2DesktopUI) mainArea(gtx layout.Context) layout.Dimensions {
 		layout.Flexed(1, u.body),
 		layout.Rigid(u.footer),
 	)
+}
+
+func (u *v2DesktopUI) exitDialog(gtx layout.Context) layout.Dimensions {
+	for u.cancelExit.Clicked(gtx) {
+		u.mu.Lock()
+		u.confirmingExit = false
+		u.dontAskAgain.Value = false
+		u.mu.Unlock()
+	}
+	for u.confirmExit.Clicked(gtx) {
+		if u.dontAskAgain.Value {
+			cfg := u.core.ManagerConfig()
+			cfg.General.ConfirmExit = false
+			_ = u.core.SaveManager(context.Background(), cfg)
+		}
+		u.shutdownNow()
+	}
+	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		maxWidth := gtx.Dp(unit.Dp(520))
+		if gtx.Constraints.Max.X > maxWidth { gtx.Constraints.Max.X = maxWidth }
+		return card(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(sectionTitle(u.th, "Exit GPT Tunnel Manager?")),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(9), Bottom: unit.Dp(9)}.Layout(gtx, mutedCaption(u.th, "This stops the Manager MCP, its one optional secure tunnel, and any downstream MCP runtimes owned by the router.")) }),
+				layout.Rigid(material.CheckBox(u.th, &u.dontAskAgain, "Don't ask again").Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Top: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+							layout.Rigid(secondaryButton(u.th, &u.cancelExit, "Cancel")),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(8)}.Layout(gtx) }),
+							layout.Rigid(dangerButton(u.th, &u.confirmExit, "Exit Manager")),
+						)
+					})
+				}),
+			)
+		})(gtx)
+	})
 }
 
 func (u *v2DesktopUI) body(gtx layout.Context) layout.Dimensions {
@@ -483,18 +616,14 @@ func (u *v2DesktopUI) settingsPage(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(editorSurface(u.th, &u.embeddingModel, "Embedding model")),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &u.embeddingKey, "API key (leave blank to keep current)")) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(5)}.Layout(gtx, faintCaption(u.th, "Credential: "+credentialStatus)) }),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(14)}.Layout(gtx, primaryButton(u.th, &u.saveSettings, "Save Settings")) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(14)}.Layout(gtx, primaryButton(u.th, &u.saveSettings, "Save Manager & Embedding Settings")) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return v2ProductSettingsSection(u, gtx) }),
 		)
 	})(gtx)
 }
 
 func (u *v2DesktopUI) logsPage(gtx layout.Context) layout.Dimensions {
-	return card(func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(sectionTitle(u.th, "Operational log")),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, mutedCaption(u.th, "The v2 runtime is active. Structured logging integration is the next Phase 11 preservation slice.")) }),
-		)
-	})(gtx)
+	return v2LogsPage(u, gtx)
 }
 
 func (u *v2DesktopUI) footer(gtx layout.Context) layout.Dimensions {
@@ -528,7 +657,8 @@ func (u *v2DesktopUI) trayReady() {
 			case <-ticker.C:
 				running := 0
 				for _, snapshot := range u.core.Snapshots() { if snapshot.Running { running++ } }
-				status.SetTitle(fmt.Sprintf("Status: Manager running · %d/%d servers running", running, len(u.core.Entries())))
+				tunnel := u.core.ManagerTunnelStatus()
+				status.SetTitle(fmt.Sprintf("Status: Manager running · tunnel %s · %d/%d servers running", tunnel.State, running, len(u.core.Entries())))
 			}
 		}
 	}()
