@@ -157,7 +157,7 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 		if err != nil {
 			return nil, err
 		}
-		sdkSession, err = client.Connect(startupCtx, stdio, nil)
+		sdkSession, err = client.Connect(startupCtx, wrapTaskAwareTransport(stdio), nil)
 		if err != nil {
 			_ = stdio.Abort()
 			return nil, fmt.Errorf("connect stdio MCP %s: %w", server.ID, err)
@@ -187,7 +187,7 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 		if transportErr != nil {
 			return nil, transportErr
 		}
-		sdkSession, err = client.Connect(startupCtx, transport, nil)
+		sdkSession, err = client.Connect(startupCtx, wrapTaskAwareTransport(transport), nil)
 		if err != nil {
 			return nil, fmt.Errorf("connect external HTTP MCP %s: %w", server.ID, err)
 		}
