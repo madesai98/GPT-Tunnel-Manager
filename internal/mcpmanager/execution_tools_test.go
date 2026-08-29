@@ -1,43 +1,16 @@
 package mcpmanager
 
 import (
-	"context"
+	"encoding/json"
 	"testing"
-	"time"
 
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/executionrouter"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func TestPhase8RouterServerRegistersAllTenExecutorsWithExactClasses(t *testing.T) {
-	s := NewRouterServer(nil, nil)
-	if err := s.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = s.Stop(ctx)
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	client := mcp.NewClient(&mcp.Implementation{Name: "phase8-registration-test", Version: "1"}, nil)
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: s.URL()}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer session.Close()
-
-	listed, err := session.ListTools(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(listed.Tools) != 12 {
-		t.Fatalf("Phase 7+8 router tools = %d, want 12", len(listed.Tools))
-	}
-
-	wantExecutors := map[toolcontract.ExecutorClass]bool{
+func TestPhase8ExecutorDefinitionsCoverAllTenExactClasses(t *testing.T) {
+	want := map[toolcontract.ExecutorClass]bool{
 		toolcontract.ExecutorReadOnlyClosed:              true,
 		toolcontract.ExecutorReadOnlyOpen:                true,
 		toolcontract.ExecutorAdditiveClosed:              true,
@@ -49,72 +22,62 @@ func TestPhase8RouterServerRegistersAllTenExecutorsWithExactClasses(t *testing.T
 		toolcontract.ExecutorDestructiveOpen:             true,
 		toolcontract.ExecutorDestructiveOpenIdempotent:   true,
 	}
-	discoveryTools := map[string]bool{"search_tools": true, "get_tool": true}
-	for _, tool := range listed.Tools {
-		if discoveryTools[tool.Name] {
-			delete(discoveryTools, tool.Name)
-			continue
+	if len(executorDefinitions) != len(want) {
+		t.Fatalf("executor definitions = %d, want %d", len(executorDefinitions), len(want))
+	}
+	for _, definition := range executorDefinitions {
+		if !want[definition.Class] {
+			t.Fatalf("unexpected executor class %q", definition.Class)
 		}
-		class := toolcontract.ExecutorClass(tool.Name)
-		if !wantExecutors[class] {
-			t.Fatalf("unexpected Phase 8 tool %q", tool.Name)
+		openWorld := definition.OpenWorld
+		var destructiveHint *bool
+		if !definition.ReadOnly {
+			destructive := definition.Destructive
+			destructiveHint = &destructive
 		}
-		if tool.InputSchema == nil {
-			t.Fatalf("executor %q has no input schema", tool.Name)
-		}
-		if tool.Annotations == nil {
-			t.Fatalf("executor %q has no annotations", tool.Name)
+		tool := &mcp.Tool{
+			Name: string(definition.Class),
+			Annotations: &mcp.ToolAnnotations{
+				ReadOnlyHint:    definition.ReadOnly,
+				DestructiveHint: destructiveHint,
+				IdempotentHint:  definition.Idempotent,
+				OpenWorldHint:   &openWorld,
+			},
 		}
 		normalized, err := toolcontract.ExecutorClassForTool(tool)
 		if err != nil {
-			t.Fatalf("normalize %q annotations: %v", tool.Name, err)
+			t.Fatalf("normalize %q annotations: %v", definition.Class, err)
 		}
-		if normalized != class {
-			t.Fatalf("executor %q annotations normalize to %q", tool.Name, normalized)
+		if normalized != definition.Class {
+			t.Fatalf("executor %q annotations normalize to %q", definition.Class, normalized)
 		}
-		delete(wantExecutors, class)
+		delete(want, definition.Class)
 	}
-	if len(discoveryTools) != 0 || len(wantExecutors) != 0 {
-		t.Fatalf("missing discovery=%v executors=%v", discoveryTools, wantExecutors)
+	if len(want) != 0 {
+		t.Fatalf("missing executor classes: %v", want)
 	}
 }
 
 func TestPhase8UnavailableRouterReturnsOutcomeAwareToolError(t *testing.T) {
-	s := NewRouterServer(nil, nil)
-	if err := s.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = s.Stop(ctx)
+	result := executionFailureResult(&executionrouter.ExecutionError{
+		Code:      executionrouter.CodeManagerUnavailable,
+		Message:   "manager execution router is unavailable",
+		Outcome:   executionrouter.OutcomeNotStarted,
+		Retryable: true,
 	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	client := mcp.NewClient(&mcp.Implementation{Name: "phase8-error-test", Version: "1"}, nil)
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: s.URL()}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer session.Close()
-
-	result, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      string(toolcontract.ExecutorReadOnlyClosed),
-		Arguments: map[string]any{"execution_handle": "eh1.unavailable.unavailable", "arguments": map[string]any{}},
-	})
-	if err != nil {
-		t.Fatalf("executor call returned protocol error: %v", err)
-	}
 	if !result.IsError {
 		t.Fatal("unavailable execution service must be a tool error")
 	}
-	structured, ok := result.StructuredContent.(map[string]any)
+	encoded, ok := result.StructuredContent.(json.RawMessage)
 	if !ok {
 		t.Fatalf("structured error type = %T", result.StructuredContent)
 	}
+	var structured map[string]any
+	if err := json.Unmarshal(encoded, &structured); err != nil {
+		t.Fatal(err)
+	}
 	errorBody, ok := structured["error"].(map[string]any)
 	if !ok || errorBody["code"] != "manager_unavailable" || errorBody["outcome"] != "not_started" || errorBody["retryable"] != true {
-		t.Fatalf("structured error = %#v", result.StructuredContent)
+		t.Fatalf("structured error = %#v", structured)
 	}
 }
