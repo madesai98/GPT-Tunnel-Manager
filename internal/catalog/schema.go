@@ -205,9 +205,9 @@ CREATE TABLE source_servers (
 `
 
 const migrationV3SQL = `
-CREATE INDEX routing_preferences_scope_target
+CREATE INDEX IF NOT EXISTS routing_preferences_scope_target
 ON routing_preferences(profile_id, target_key);
-CREATE INDEX routing_preferences_review_state
+CREATE INDEX IF NOT EXISTS routing_preferences_review_state
 ON routing_preferences(review_state);
 
 CREATE TABLE enrichment_batches (

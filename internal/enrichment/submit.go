@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/catalog"
-	"github.com/madesai98/GPT-Tunnel-Manager/internal/retrieval"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/toolcontract"
 )
 
