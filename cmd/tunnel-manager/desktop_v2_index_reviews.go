@@ -79,9 +79,15 @@ func v2IndexReviewPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 	toolBatches, toolErr := u.core.PendingEnrichment(ctx, catalog.BatchToolEnrichment, 100)
 	capabilityBatches, capabilityErr := u.core.PendingEnrichment(ctx, catalog.BatchCapabilityReconciliation, 100)
 	reviews, reviewErr := u.core.PendingEnrichment(ctx, catalog.BatchAmbiguityReview, 100)
-	if toolErr != nil { toolBatches = nil }
-	if capabilityErr != nil { capabilityBatches = nil }
-	if reviewErr != nil { reviews = nil }
+	if toolErr != nil {
+		toolBatches = nil
+	}
+	if capabilityErr != nil {
+		capabilityBatches = nil
+	}
+	if reviewErr != nil {
+		reviews = nil
+	}
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
@@ -104,7 +110,7 @@ func v2IndexReviewPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 								})
 							}),
 						)
-					})(gtx)),
+					})),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
 					layout.Rigid(card(func(gtx layout.Context) layout.Dimensions {
 						rows := []layout.FlexChild{
@@ -119,14 +125,14 @@ func v2IndexReviewPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 										layout.Rigid(mutedCaption(u.th, v2BatchSummary(b))),
 										layout.Rigid(faintCaption(u.th, b.ID)),
 									)
-								}))(gtx)
+								}))
 							}))
 						}
 						if len(toolBatches)+len(capabilityBatches) == 0 {
 							rows = append(rows, layout.Rigid(mutedCaption(u.th, "No required enrichment blockers.")))
 						}
 						return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
-					})(gtx)),
+					})),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
 					layout.Rigid(card(func(gtx layout.Context) layout.Dimensions {
 						rows := []layout.FlexChild{layout.Rigid(sectionTitle(u.th, fmt.Sprintf("Ambiguity Reviews (%d)", len(reviews))))}
@@ -171,14 +177,14 @@ func v2IndexReviewPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 										}),
 									)
 									return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
-								}))(gtx)
+								}))
 							}))
 						}
 						if len(reviews) == 0 {
 							rows = append(rows, layout.Rigid(mutedCaption(u.th, "No open Ambiguity Reviews.")))
 						}
 						return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
-					})(gtx)),
+					})),
 				}
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 			})
