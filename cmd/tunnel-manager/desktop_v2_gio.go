@@ -25,7 +25,6 @@ import (
 	"gioui.org/widget/material"
 
 	coreapp "github.com/madesai98/GPT-Tunnel-Manager/internal/app"
-	"github.com/madesai98/GPT-Tunnel-Manager/internal/catalog"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/v2config"
 )
 
@@ -399,7 +398,7 @@ func (u *v2DesktopUI) serversPage(gtx layout.Context) layout.Dimensions {
 					})
 				}),
 			)
-		})(gtx))
+		}))
 	})
 }
 
@@ -534,5 +533,3 @@ func (u *v2DesktopUI) trayReady() {
 		}
 	}()
 }
-
-var _ = catalog.BatchAmbiguityReview
