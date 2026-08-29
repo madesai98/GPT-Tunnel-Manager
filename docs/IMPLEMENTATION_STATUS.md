@@ -10,7 +10,7 @@ Date: 2026-08-28
 
 Branch: `feature/v2-mcp-router`
 
-Status: **implementation in progress; Phases 1–3 complete, Phase 4 next**.
+Status: **implementation in progress; Phases 1–4 complete, Phase 5 next**.
 
 The canonical v2 implementation contract is `docs/V2_IMPLEMENTATION_PLAN.md`. `CONTEXT.md` and ADRs 0009 onward describe the accepted v2 architecture and supersede conflicting v1 topology assumptions where stated.
 
@@ -105,7 +105,34 @@ Phase 3 exit gate is satisfied: arbitrary test MCPs can be listed and called saf
 
 ### Phase 4 — catalog, generations, and routing state
 
-Next. Implement the Portable-Root-local SQLite catalog for authoritative source contracts, content fingerprints, active/staging generations, persistent staging resume, dirty partitions, dependency/neighborhood hashes, integrity validation/quarantine, and atomic generation promotion tied to the Phase 2 routing-state hash contract.
+Complete through commit `6718b94c034127687de816fd7df0ce26656c423c` (primary catalog implementation `38020e6c16facbc2804f6eea12e307b0d4692ae6`, dependency tidy `4dd52a1a9ce7ef0477a9d343cd9340c9aeb40e62`).
+
+`internal/catalog` and the supporting routing/tool-contract packages now provide:
+
+- a Portable-Root-local `data/catalog.sqlite3` database using the pure-Go `modernc.org/sqlite` driver, with foreign keys, WAL, full synchronous durability, bounded busy waiting, schema versioning, and a tested v1-to-v2 catalog schema migration;
+- startup integrity checking with corrupt-database quarantine (including WAL/SHM sidecars) followed by clean initialization rather than salvage or trust of partial routing data;
+- a production SQLite `routingstate.Backend` persisting `routing_revision`, `routing_state_hash`, and independent `preference_revision` state;
+- a runtime routing-revision advance primitive that does not misuse revision as the correctness proof;
+- persistent staging/active/superseded generation state, with matching staging generations resumable after reopen and stale staging generations superseded when the Routing State Hash changes;
+- one shared deterministic MCP tool-contract fingerprint implementation used by both downstream session snapshots and catalog authoritative tool storage;
+- authoritative generation-scoped source server context and full downstream tool contracts, with Server ID/tool invocation identity and content fingerprints kept separate from later semantic artifacts;
+- source-server projection that intentionally excludes endpoints, environment values, credential references, runtime/logging configuration, and raw authentication material from catalog source context;
+- dirty routing partitions for incremental rebuild invalidation without weakening the global Routing State Hash freshness contract;
+- generation dependency records and deterministic neighborhood/context hash storage for later embedding/enrichment invalidation;
+- content-addressed generic artifacts with deterministic content/dependency/context identities and validated reuse across generations;
+- storage boundaries for later lexical records, capability/enrichment artifacts, Routing Profiles/Preferences, and task/resource continuation mappings without implementing later-phase pipelines prematurely;
+- transactional promotion that verifies staging status, current Routing State Hash, source membership/completeness, tool source fingerprints/content integrity, dirty partitions, required dependencies/artifacts, and catalog integrity before atomically replacing the active generation;
+- active-generation validation that keeps a valid active generation usable during a same-routing-state replacement build and fails closed when routing state, dirty metadata, or authoritative source integrity no longer matches.
+
+Focused Phase 4 tests cover fresh schema creation, reopen persistence, SQLite routing-state persistence, crash/reopen staging resume, stale hash/dirty/incomplete/fingerprint/dependency promotion blockers, atomic activation and rollback behavior, content-addressed reuse, corrupt catalog quarantine/no-trust behavior, independent preference revision, staging reconciliation, supported schema migration, and server-contract credential/operational-data exclusion.
+
+Phase 4 CI run `33231527007` completed successfully: `go mod tidy` produced zero diff, `go test ./...` and `go vet ./...` passed, all six headless cross-build targets passed, and native Linux/Windows/macOS GUI builds passed.
+
+Phase 4 exit gate is satisfied: the authoritative catalog rebuild foundation is incremental and crash-safe, with persistent staging, dirty/dependency metadata, validated reusable artifacts, fail-closed freshness/integrity checks, and atomic activation in place.
+
+### Phase 5 — embedding and deterministic retrieval substrate
+
+Next. Implement the embedding provider abstraction/OpenAI-compatible provider, batching/dimension/model identity handling, persistent catalog embeddings, memory-only query embedding LRU, lexical/FTS records and retrieval, exact cosine search, correctness tests, and the accepted 1k/5k/10k benchmark measurements. Do not begin agent-driven semantic enrichment until the deterministic retrieval substrate exit gate passes.
 
 ## Clean v2 break
 
