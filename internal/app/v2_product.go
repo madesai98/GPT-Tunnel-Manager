@@ -467,6 +467,7 @@ func (p *v2ProductRuntime) updaterLoop(a *V2App) {
 				if _, err := a.InstallTunnelClientUpdate(a.ctx); err != nil {
 					p.log.Log(logging.Warn, "Manager", "Updater", "automatic update failed", map[string]any{"error": err.Error()})
 				}
+			}
 		}
 		delay := time.Duration(cfg.UpdateCheckIntervalHours) * time.Hour
 		if delay <= 0 {
