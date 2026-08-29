@@ -29,6 +29,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+const phase10ServerID = "srv_10101010101010101010101010101010"
+
 func TestV2ManagerModernContractAndWorkflow(t *testing.T) {
 	fixture := newPhase10Fixture(t, false)
 	session := connectPhase10Modern(t, fixture.endpoint)
@@ -48,8 +50,7 @@ func TestV2ManagerModernContractAndWorkflow(t *testing.T) {
 	}
 
 	toolBatchResult := callPhase10Tool(t, session, "index_get_enrichment_batch", map[string]any{
-		"kind":  string(catalog.BatchToolEnrichment),
-		"limit": 1,
+		"kind": string(catalog.BatchToolEnrichment), "limit": 1,
 	})
 	var toolBatchOut indexGetBatchOutput
 	decodePhase10Structured(t, toolBatchResult, &toolBatchOut)
@@ -68,15 +69,14 @@ func TestV2ManagerModernContractAndWorkflow(t *testing.T) {
 		toolResponse.Items = append(toolResponse.Items, enrichment.ToolEnrichmentResult{
 			MemberKey: item.Tool.MemberKey,
 			Guidance: enrichment.ToolGuidance{
-				Purpose:      "Echo supplied text and expose a follow-up resource.",
-				UseWhen:      []string{"The caller needs deterministic echo behavior."},
+				Purpose: "Echo supplied text and expose a follow-up resource.",
+				UseWhen: []string{"The caller needs deterministic echo behavior."},
 				Capabilities: []string{"echo"},
 			},
 		})
 	}
 	submitTool := callPhase10Tool(t, session, "index_submit_enrichment_batch", map[string]any{
-		"batch_id": toolBatchOut.Batches[0].ID,
-		"response": toolResponse,
+		"batch_id": toolBatchOut.Batches[0].ID, "response": toolResponse,
 	})
 	var submitToolOut indexSubmitBatchOutput
 	decodePhase10Structured(t, submitTool, &submitToolOut)
@@ -85,8 +85,7 @@ func TestV2ManagerModernContractAndWorkflow(t *testing.T) {
 	}
 
 	capabilityBatchResult := callPhase10Tool(t, session, "index_get_enrichment_batch", map[string]any{
-		"kind":  string(catalog.BatchCapabilityReconciliation),
-		"limit": 1,
+		"kind": string(catalog.BatchCapabilityReconciliation), "limit": 1,
 	})
 	var capabilityBatchOut indexGetBatchOutput
 	decodePhase10Structured(t, capabilityBatchResult, &capabilityBatchOut)
@@ -104,15 +103,11 @@ func TestV2ManagerModernContractAndWorkflow(t *testing.T) {
 	capabilityResponse := enrichment.CapabilityBatchResponse{Hierarchy: enrichment.CapabilityHierarchy{
 		Protocol: enrichment.CapabilityProtocolVersion,
 		Capabilities: []enrichment.CapabilityNode{{
-			ID:          "echo",
-			Name:        "Echo",
-			Description: "Deterministic echo operations.",
-			ToolMembers: members,
+			ID: "echo", Name: "Echo", Description: "Deterministic echo operations.", ToolMembers: members,
 		}},
 	}}
 	submitCapability := callPhase10Tool(t, session, "index_submit_enrichment_batch", map[string]any{
-		"batch_id": capabilityBatchOut.Batches[0].ID,
-		"response": capabilityResponse,
+		"batch_id": capabilityBatchOut.Batches[0].ID, "response": capabilityResponse,
 	})
 	var submitCapabilityOut indexSubmitBatchOutput
 	decodePhase10Structured(t, submitCapability, &submitCapabilityOut)
@@ -149,8 +144,8 @@ func TestV2ManagerModernContractAndWorkflow(t *testing.T) {
 
 	executed := callPhase10Tool(t, session, string(toolcontract.ExecutorReadOnlyClosed), executionrouter.Input{
 		ExecutionHandle: getOut.ExecutionHandle,
-		ToolName:        "echo",
-		Arguments:       map[string]any{"text": "hello"},
+		ToolName: "echo",
+		Arguments: map[string]any{"text": "hello"},
 	})
 	if executed.IsError {
 		t.Fatalf("executor returned tool error: %#v", executed.StructuredContent)
@@ -184,7 +179,6 @@ func TestV2ManagerModernContractAndWorkflow(t *testing.T) {
 func TestV2ManagerLegacyUsesSameLogicalContract(t *testing.T) {
 	fixture := newPhase10Fixture(t, false)
 	client := fixture.http.Client()
-
 	initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"phase10-legacy","version":"1"}}}`
 	response, body := phase10POST(t, client, fixture.endpoint, initialize, nil)
 	if response.StatusCode != http.StatusOK {
@@ -194,38 +188,26 @@ func TestV2ManagerLegacyUsesSameLogicalContract(t *testing.T) {
 	if sessionID == "" {
 		t.Fatal("legacy initialize did not establish a stateful MCP session")
 	}
-	var initEnvelope struct {
-		Result struct {
-			ProtocolVersion string `json:"protocolVersion"`
-		} `json:"result"`
-	}
+	var initEnvelope struct { Result struct { ProtocolVersion string `json:"protocolVersion"` } `json:"result"` }
 	if err := json.Unmarshal(body, &initEnvelope); err != nil {
 		t.Fatalf("decode legacy initialize: %v", err)
 	}
 	if initEnvelope.Result.ProtocolVersion != "2025-11-25" {
 		t.Fatalf("legacy protocol = %q", initEnvelope.Result.ProtocolVersion)
 	}
-
 	headers := http.Header{
-		"Mcp-Session-Id":       []string{sessionID},
+		"Mcp-Session-Id": []string{sessionID},
 		"Mcp-Protocol-Version": []string{"2025-11-25"},
 	}
-	initialized := `{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`
-	response, body = phase10POST(t, client, fixture.endpoint, initialized, headers)
+	response, body = phase10POST(t, client, fixture.endpoint, `{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`, headers)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		t.Fatalf("legacy initialized status = %d body=%s", response.StatusCode, body)
 	}
-
-	listRequest := `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`
-	response, body = phase10POST(t, client, fixture.endpoint, listRequest, headers)
+	response, body = phase10POST(t, client, fixture.endpoint, `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`, headers)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("legacy tools/list status = %d body=%s", response.StatusCode, body)
 	}
-	var listEnvelope struct {
-		Result struct {
-			Tools []*mcp.Tool `json:"tools"`
-		} `json:"result"`
-	}
+	var listEnvelope struct { Result struct { Tools []*mcp.Tool `json:"tools"` } `json:"result"` }
 	if err := json.Unmarshal(body, &listEnvelope); err != nil {
 		t.Fatalf("decode legacy tools/list: %v", err)
 	}
@@ -236,7 +218,6 @@ func TestV2ManagerLocalProtectionAndOriginRejection(t *testing.T) {
 	fixture := newPhase10Fixture(t, true)
 	client := fixture.http.Client()
 	initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"phase10-security","version":"1"}}}`
-
 	response, body := phase10POST(t, client, fixture.endpoint, initialize, nil)
 	if response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unprotected request status = %d body=%s", response.StatusCode, body)
@@ -261,15 +242,10 @@ func TestV2ManagerLocalProtectionAndOriginRejection(t *testing.T) {
 func assertPhase10ToolContract(t *testing.T, tools []*mcp.Tool) {
 	t.Helper()
 	want := map[string]bool{
-		"index_status": true,
-		"index_refresh": true,
-		"index_get_enrichment_batch": true,
-		"index_submit_enrichment_batch": true,
-		"index_commit": true,
-		"search_tools": true,
-		"get_tool": true,
-		"get_routing_preferences": true,
-		"set_routing_preferences": true,
+		"index_status": true, "index_refresh": true, "index_get_enrichment_batch": true,
+		"index_submit_enrichment_batch": true, "index_commit": true,
+		"search_tools": true, "get_tool": true,
+		"get_routing_preferences": true, "set_routing_preferences": true,
 		string(toolcontract.ExecutorReadOnlyClosed): true,
 		string(toolcontract.ExecutorReadOnlyOpen): true,
 		string(toolcontract.ExecutorAdditiveClosed): true,
@@ -400,12 +376,12 @@ func phase10POST(t *testing.T, client *http.Client, endpoint, body string, heade
 }
 
 type phase10Fixture struct {
-	endpoint  string
-	http      *httptest.Server
-	server    *V2Server
-	catalog   *catalog.Catalog
+	endpoint string
+	http *httptest.Server
+	server *V2Server
+	catalog *catalog.Catalog
 	lifecycle *routedlifecycle.Service
-	secrets   *phase10Secrets
+	secrets *phase10Secrets
 }
 
 func newPhase10Fixture(t *testing.T, protection bool) *phase10Fixture {
@@ -413,38 +389,25 @@ func newPhase10Fixture(t *testing.T, protection bool) *phase10Fixture {
 	manager := v2config.DefaultManagerConfig(39091)
 	manager.LocalManager.AccessProtectionEnabled = protection
 	manager.ManagedDefaults.IdleTimeoutSeconds = 3600
-
 	closedWorld := false
 	nondestructive := false
 	tool := &mcp.Tool{
-		Name:        "echo",
-		Title:       "Echo",
+		Name: "echo", Title: "Echo",
 		Description: "Echo supplied text and return a follow-up resource link.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}`),
 		Annotations: &mcp.ToolAnnotations{
-			Title:           "Echo",
-			ReadOnlyHint:    true,
-			DestructiveHint: &nondestructive,
-			IdempotentHint:  true,
-			OpenWorldHint:   &closedWorld,
+			Title: "Echo", ReadOnlyHint: true, DestructiveHint: &nondestructive,
+			IdempotentHint: true, OpenWorldHint: &closedWorld,
 		},
 	}
 	fingerprint, canonical, err := toolcontract.FingerprintTools([]*mcp.Tool{tool})
 	if err != nil {
 		t.Fatalf("fingerprint fake downstream: %v", err)
 	}
-	runtime := &phase10Runtime{
-		snapshot: downstream.ToolSnapshot{Tools: canonical, Fingerprint: fingerprint},
-		done:     make(chan struct{}),
-	}
+	runtime := &phase10Runtime{snapshot: downstream.ToolSnapshot{Tools: canonical, Fingerprint: fingerprint}, done: make(chan struct{})}
 	servers := v2config.ServersConfig{SchemaVersion: v2config.SchemaVersion, Servers: []v2config.ServerEntry{{
-		ID:   "phase10-server",
-		Name: "Phase 10 Server",
-		Mode: v2config.ModeManaged,
-		Transport: v2config.TransportConfig{
-			Type:  v2config.TransportStdio,
-			Stdio: &v2config.StdioTransport{Executable: "phase10-fake"},
-		},
+		ID: phase10ServerID, Name: "Phase 10 Server", Mode: v2config.ModeManaged,
+		Transport: v2config.TransportConfig{Type: v2config.TransportStdio, Stdio: &v2config.StdioTransport{Executable: "phase10-fake"}},
 	}}}
 	if err := v2config.ValidateManager(manager); err != nil {
 		t.Fatalf("validate test Manager config: %v", err)
@@ -452,7 +415,6 @@ func newPhase10Fixture(t *testing.T, protection bool) *phase10Fixture {
 	if err := v2config.ValidateServers(servers); err != nil {
 		t.Fatalf("validate test server config: %v", err)
 	}
-
 	c, err := catalog.Open(t.Context(), t.TempDir())
 	if err != nil {
 		t.Fatalf("open catalog: %v", err)
@@ -491,27 +453,17 @@ func newPhase10Fixture(t *testing.T, protection bool) *phase10Fixture {
 	}
 	secretStore := newPhase10Secrets()
 	server, err := NewV2Server(t.Context(), V2ServerOptions{
-		Manager:     manager,
-		Catalog:     c,
-		Secrets:     secretStore,
-		Lifecycle:   lifecycle,
-		Indexing:    indexService,
-		Discovery:   discoveryService,
-		Preferences: preferences,
-		RoutingState: routing,
-		Handles:      handles,
+		Manager: manager, Catalog: c, Secrets: secretStore, Lifecycle: lifecycle,
+		Indexing: indexService, Discovery: discoveryService, Preferences: preferences,
+		RoutingState: routing, Handles: handles,
 	})
 	if err != nil {
 		t.Fatalf("create v2 Manager server: %v", err)
 	}
 	httpServer := httptest.NewServer(server.Handler())
 	fixture := &phase10Fixture{
-		endpoint:  httpServer.URL + managerMCPPath,
-		http:      httpServer,
-		server:    server,
-		catalog:   c,
-		lifecycle: lifecycle,
-		secrets:   secretStore,
+		endpoint: httpServer.URL + managerMCPPath, http: httpServer, server: server,
+		catalog: c, lifecycle: lifecycle, secrets: secretStore,
 	}
 	t.Cleanup(func() {
 		httpServer.Close()
@@ -542,8 +494,8 @@ func (phase10Embedding) Embed(ctx context.Context, inputs []string) ([][]float32
 }
 
 type phase10Runtime struct {
-	snapshot  downstream.ToolSnapshot
-	done      chan struct{}
+	snapshot downstream.ToolSnapshot
+	done chan struct{}
 	closeOnce sync.Once
 }
 
@@ -574,70 +526,48 @@ func (r *phase10Runtime) Close(context.Context) error {
 	r.closeOnce.Do(func() { close(r.done) })
 	return nil
 }
-
 func (r *phase10Runtime) Done() <-chan struct{} { return r.done }
 
 type phase10Routing struct {
 	tracker *routingstate.Tracker
-	hash    string
+	hash string
 }
 
 func newPhase10Routing(t *testing.T, hash string) *phase10Routing {
 	t.Helper()
-	tracker, err := routingstate.NewTracker(routingstate.NewMemoryBackend(routingstate.Snapshot{
-		RoutingRevision:  1,
-		RoutingStateHash: hash,
-	}))
+	tracker, err := routingstate.NewTracker(routingstate.NewMemoryBackend(routingstate.Snapshot{RoutingRevision: 1, RoutingStateHash: hash}))
 	if err != nil {
 		t.Fatalf("create routing tracker: %v", err)
 	}
 	return &phase10Routing{tracker: tracker, hash: hash}
 }
-
-func (s *phase10Routing) Snapshot(ctx context.Context) (routingstate.Snapshot, error) {
-	return s.tracker.Snapshot(ctx)
-}
-
-func (s *phase10Routing) AdvanceRoutingRevision(ctx context.Context) (routingstate.Snapshot, error) {
-	return s.tracker.AdvanceRoutingRevision(ctx)
-}
-
+func (s *phase10Routing) Snapshot(ctx context.Context) (routingstate.Snapshot, error) { return s.tracker.Snapshot(ctx) }
+func (s *phase10Routing) AdvanceRoutingRevision(ctx context.Context) (routingstate.Snapshot, error) { return s.tracker.AdvanceRoutingRevision(ctx) }
 func (s *phase10Routing) CurrentRoutingStateHash() (string, bool) { return s.hash, s.hash != "" }
 
 type phase10Secrets struct {
-	mu     sync.Mutex
+	mu sync.Mutex
 	values map[string][]byte
 }
 
 func newPhase10Secrets() *phase10Secrets { return &phase10Secrets{values: make(map[string][]byte)} }
-
 func (s *phase10Secrets) Put(_ context.Context, ref string, value []byte) error {
-	if err := secrets.ValidateRef(ref); err != nil {
-		return err
-	}
+	if err := secrets.ValidateRef(ref); err != nil { return err }
 	s.mu.Lock()
 	s.values[ref] = append([]byte(nil), value...)
 	s.mu.Unlock()
 	return nil
 }
-
 func (s *phase10Secrets) Get(_ context.Context, ref string) ([]byte, error) {
-	if err := secrets.ValidateRef(ref); err != nil {
-		return nil, err
-	}
+	if err := secrets.ValidateRef(ref); err != nil { return nil, err }
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	value, ok := s.values[ref]
-	if !ok {
-		return nil, secrets.ErrNotFound
-	}
+	if !ok { return nil, secrets.ErrNotFound }
 	return append([]byte(nil), value...), nil
 }
-
 func (s *phase10Secrets) Delete(_ context.Context, ref string) error {
-	if err := secrets.ValidateRef(ref); err != nil {
-		return err
-	}
+	if err := secrets.ValidateRef(ref); err != nil { return err }
 	s.mu.Lock()
 	delete(s.values, ref)
 	s.mu.Unlock()
