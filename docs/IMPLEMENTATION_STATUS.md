@@ -10,7 +10,7 @@ Date: 2026-08-29
 
 Branch: `feature/v2-mcp-router`
 
-Status: **implementation in progress; Phases 1–8 complete, Phase 9 next**.
+Status: **implementation in progress; Phases 1–9 complete, Phase 10 next**.
 
 The canonical v2 implementation contract is `docs/V2_IMPLEMENTATION_PLAN.md`. `CONTEXT.md` and ADRs 0009 onward describe the accepted v2 architecture and supersede conflicting v1 topology assumptions where stated.
 
@@ -248,7 +248,31 @@ Focused Phase 8 tests cover all ten registration/class mappings, valid-handle di
 
 Phase 8 implementation CI run `33266084319` completed successfully: `go mod tidy`/module-graph verification produced zero diff, `go test ./...` passed, the dedicated Phase 7 quality gate remained green, `go vet ./...` passed, the retrieval-scale benchmark step passed, native Linux/Windows/macOS GUI builds passed, Windows process/DPAPI checks passed, and all six headless `CGO_ENABLED=0` cross-build targets passed.
 
-Phase 8 exit gate is satisfied: the safety/executor registration matrix is complete and normalizes correctly, authenticated authority and schema/live-contract failures stop before unsafe dispatch, ambiguous calls are never replayed automatically, and representative mixed MCP results round-trip through the direct downstream path without result loss. Phase 9 — Router-native lifecycle — is next; Phase 9 work has not been started as part of Phase 8.
+Phase 8 exit gate is satisfied: the safety/executor registration matrix is complete and normalizes correctly, authenticated authority and schema/live-contract failures stop before unsafe dispatch, ambiguous calls are never replayed automatically, and representative mixed MCP results round-trip through the direct downstream path without result loss. Phase 9 lifecycle work remained intentionally deferred from Phase 8.
+
+### Phase 9 — router-native lifecycle
+
+Complete through commit `d41c3a9d12f4d4aabe94556d76fac594bf9b1f6e` (primary lifecycle implementation `24ba54d5b515b922ac82223af0c8462ca8851df0`).
+
+`internal/routedlifecycle`, the existing `internal/executionrouter` provider boundary, and `internal/v2state` mutation coordination now provide:
+
+- a v2-native downstream-session/lifecycle provider satisfying the existing Phase 8 `executionrouter.SessionProvider` boundary while reusing the Phase 3 `internal/downstream.Factory` and `downstream.Session` substrate rather than reintroducing per-server Secure Tunnels or downstream `tunnel-client` ownership;
+- context-aware per-server acquisition/transition serialization with only short map lookup locking and no registry-wide lifecycle mutex on routed hot paths, allowing unrelated servers to start/acquire/call concurrently while same-server start/stop/restart/acquire decisions remain serialized;
+- idempotent Managed Use Leases that reserve active use before potentially slow startup, hold the exact runtime/session reference for the lease lifetime, expose accurate active-use accounting, update Manager-owned activity timestamps directly, and release on every router success/error/drift/result/cancellation path after acquisition;
+- Managed stopped-to-routed-use auto-start and final-release idle-stop behavior driven exclusively by Manager-owned lease/call activity timestamps and configured v2 Manager/per-server idle timeouts, including idle-timer cancellation/reset when a new lease arrives;
+- bounded task-held leases using the same lifecycle primitive, with explicit terminal release plus automatic expiry, without adding the Phase 10 Manager task mapping/proxy protocol surface early;
+- correct mode behavior: stopped Manual servers return an explicit blocker and are never auto-started by routed acquisition; Disabled servers reject acquisition/start; Always On servers are maintained/reused, ordinary stop is rejected, and unexpected runtime exit triggers bounded retry/re-establishment while the Manager remains active;
+- stable lifecycle blocker classification through the execution router for `manual_server_stopped`, `server_disabled`, `server_busy`, and `manager_shutting_down`, preserving Phase 8 `not_started` semantics when dispatch never began;
+- routing/runtime mutation reservations at the v2 state coordinator boundary so edits that affect name/mode/transport/environment/runtime, disable, delete, stop, or restart fail immediately with `server_busy` while use leases are active, carrying the exact `active_call_count`, without queuing or forcibly interrupting active use; logging-only Server Entry changes remain non-tearing and independently mutable;
+- deterministic crash/close behavior: a crashed Managed runtime is detached without corrupting outstanding lease accounting, a later acquisition reconnects it, an Always On crash is re-maintained, Manager shutdown cancels active Manager-owned routed call contexts, stops idle timers, and closes current Manager-owned downstream sessions/runtimes;
+- preservation of Phase 3 notification-triggered and non-notifying pre-call tool-contract revalidation on reused sessions, with Phase 8 translating `ErrToolContractChanged` into dirty routing state, routing-revision advancement, `index_required`, and no unsafe dispatch/replay;
+- no v2 routed-lifecycle dependency on the legacy `internal/servers.Registry.opMu`, `Runtime.Activity()`, `ActivityTracking()`, `tunnel_client_telemetry`, lifecycle markers, lifecycle skills, Developer Plugins, Tunnel IDs, or downstream `tunnel-client` choreography.
+
+Focused Phase 9 tests cover unrelated-server concurrent acquisition, same-server single-start/multiple leases, Managed auto-start, active-call idle protection, final-release idle-stop, idle reset, task terminal/expiry release, Manual/Disabled/Always On semantics, `server_busy` edit/disable/delete/stop/restart protection with exact multi-lease counts, non-runtime logging mutation, failed-start accounting rollback, Managed and Always On crash handling, Manager-shutdown cancellation/owned-runtime cleanup, lease release on all router post-acquisition paths, lifecycle blocker mapping, v2-state pre-persistence mutation reservation, and live tool-contract drift through reused sessions.
+
+Phase 9 implementation CI run `33267763059` completed successfully on `d41c3a9d12f4d4aabe94556d76fac594bf9b1f6e`: committed module-graph verification produced zero diff, `go test ./...` passed, the dedicated Phase 7 quality gate remained green, `go vet ./...` passed, the retrieval-scale benchmark step passed, native Linux/Windows/macOS GUI builds passed, Windows process/DPAPI checks passed, and all six headless `CGO_ENABLED=0` cross-build targets passed.
+
+Phase 9 exit gate and Checkpoint E-style routed lifecycle coverage are satisfied: Managed lifecycle starts from routed use, active calls/tasks retain explicit leases, idle shutdown is driven by Manager-owned direct activity rather than tunnel telemetry, unrelated servers are not serialized behind a registry-wide hot-path mutex, runtime/routing mutations fail `server_busy` during active use, crash/cancellation/shutdown cleanup is deterministic, and live contract drift remains fail-closed. Phase 10 — final upstream Manager MCP surface and protocol proxying — is next and has not been started as part of Phase 9.
 
 ## Clean v2 break
 
