@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/catalog"
-	"github.com/madesai98/GPT-Tunnel-Manager/internal/toolcontract"
 )
 
 func (c *Coordinator) SubmitBatch(ctx context.Context, batchID string, responseJSON []byte) (SubmitResult, error) {
@@ -170,11 +169,13 @@ func (c *Coordinator) submitCapabilityBatch(ctx context.Context, batch catalog.E
 		}
 		dependencies = append(dependencies, catalog.ArtifactDependency{Key: "tool-enrichment:" + item.Tool.MemberKey, Fingerprint: artifact.ContentFingerprint})
 	}
-	requestIdentity, err := json.Marshal(request)
+	contextFingerprint, err := canonicalJSONFingerprint(batch.RequestJSON)
 	if err != nil {
-		return SubmitResult{}, err
+		return SubmitResult{}, fmt.Errorf("canonicalize capability batch identity: %w", err)
 	}
-	contextFingerprint := toolcontract.FingerprintJSON(requestIdentity)
+	if batch.RequestFingerprint == "" || batch.RequestFingerprint != contextFingerprint {
+		return SubmitResult{}, fmt.Errorf("%w: capability batch %s request fingerprint mismatch", catalog.ErrCatalogCorrupt, batch.ID)
+	}
 	spec := catalog.RequiredArtifactSpec{Role: RoleCapabilityHierarchy, MemberKey: "global", Kind: CapabilityHierarchyArtifactKind, Dependencies: dependencies, ContextFingerprint: contextFingerprint}
 	hierarchyPayload, err := json.Marshal(response.Hierarchy)
 	if err != nil {
