@@ -9,7 +9,6 @@ import (
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/catalog"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/retrieval"
-	"github.com/madesai98/GPT-Tunnel-Manager/internal/toolcontract"
 )
 
 func (c *Coordinator) PrepareToolEnrichment(ctx context.Context, generationID string) (catalog.EnrichmentBatchCounts, error) {
@@ -215,7 +214,10 @@ func (c *Coordinator) PrepareCapabilityReconciliation(ctx context.Context, gener
 	if len(requestBody) > c.options.MaxReconciliationBytes {
 		return catalog.EnrichmentBatchCounts{}, fmt.Errorf("capability reconciliation request is %d bytes, exceeding bound %d", len(requestBody), c.options.MaxReconciliationBytes)
 	}
-	contextFingerprint := toolcontract.FingerprintJSON(requestBody)
+	contextFingerprint, err := canonicalJSONFingerprint(requestBody)
+	if err != nil {
+		return catalog.EnrichmentBatchCounts{}, fmt.Errorf("canonicalize capability reconciliation identity: %w", err)
+	}
 	artifactSpec := catalog.RequiredArtifactSpec{Role: RoleCapabilityHierarchy, MemberKey: "global", Kind: CapabilityHierarchyArtifactKind, Dependencies: dependencies, ContextFingerprint: contextFingerprint}
 	if _, err := c.catalog.RequireArtifact(ctx, generationID, artifactSpec); err != nil {
 		return catalog.EnrichmentBatchCounts{}, err
