@@ -46,8 +46,9 @@ type Options struct {
 	Log           func(LogLine)
 
 	// OnToolContractChanged is diagnostic/invalidation plumbing for the later
-	// catalog/router phases. It is called at most once per session after a
-	// tools/list change notification or observed fingerprint drift.
+	// catalog/router phases. It is called at most once per session as soon as a
+	// reliable tools/list change notification arrives or fingerprint drift is
+	// observed.
 	OnToolContractChanged func(serverID string)
 
 	ManagedHTTPRetryInterval time.Duration
@@ -89,7 +90,7 @@ type Session struct {
 
 	supportsToolListChanged bool
 	toolContractChanged     *atomic.Bool
-	notifyOnce              sync.Once
+	notifyOnce              *sync.Once
 	onToolChanged           func(string)
 
 	ownedProcess *gtmprocess.Managed
@@ -109,11 +110,23 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 	}
 
 	changed := &atomic.Bool{}
+	notifyOnce := &sync.Once{}
+	markChanged := func() {
+		changed.Store(true)
+		notifyOnce.Do(func() {
+			if f.onToolChanged != nil {
+				safeServerCallback(f.onToolChanged, server.ID)
+			}
+		})
+	}
 	makeClient := func() (*mcp.Client, error) {
 		opts := cloneClientOptions(f.clientOptions)
 		previous := opts.ToolListChangedHandler
 		opts.ToolListChangedHandler = func(callbackCtx context.Context, req *mcp.ToolListChangedRequest) {
-			changed.Store(true)
+			// The notification itself is authoritative enough to stale the live
+			// contract. Do not wait for a later routed call before notifying the
+			// routing/catalog boundary.
+			markChanged()
 			safeToolListChangedHandler(previous, callbackCtx, req)
 		}
 		client := mcp.NewClient(&mcp.Implementation{Name: "gpt-tunnel-manager", Version: "v2"}, opts)
@@ -127,11 +140,11 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 	defer cancel()
 
 	var (
-		sdkSession *mcp.ClientSession
-		owned      *gtmprocess.Managed
+		sdkSession  *mcp.ClientSession
+		owned       *gtmprocess.Managed
 		processDone <-chan struct{}
-		stdio      *stdioTransport
-		err        error
+		stdio       *stdioTransport
+		err         error
 	)
 
 	switch server.Transport.Type {
@@ -205,6 +218,7 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 		initial:                 initial,
 		supportsToolListChanged: supportsChanged,
 		toolContractChanged:     changed,
+		notifyOnce:              notifyOnce,
 		onToolChanged:           f.onToolChanged,
 		ownedProcess:            owned,
 		processDone:             processDone,
@@ -290,6 +304,9 @@ func (s *Session) ensureAvailable() error {
 
 func (s *Session) markToolContractChanged() {
 	s.toolContractChanged.Store(true)
+	if s.notifyOnce == nil {
+		s.notifyOnce = &sync.Once{}
+	}
 	s.notifyOnce.Do(func() {
 		if s.onToolChanged != nil {
 			safeServerCallback(s.onToolChanged, s.serverID)

@@ -146,21 +146,33 @@ func newStdioProcess(cmd *exec.Cmd, stdin io.WriteCloser, shutdown time.Duration
 
 func (p *stdioProcess) shutdownProcess() error {
 	p.once.Do(func() {
-		// MCP stdio shutdown starts by closing protocol input. stdout remains
-		// exclusively owned by the protocol reader until the process exits.
+		// Reserve some of the configured shutdown budget for the outer MCP
+		// session close and pipe cleanup. The stages below remain within one
+		// bounded process-shutdown budget instead of multiplying the timeout.
+		budget := p.shutdown * 4 / 5
+		if budget <= 0 {
+			budget = p.shutdown
+		}
+		stdinWait := budget / 2
+		gracefulWait := budget / 4
+		forceWait := budget - stdinWait - gracefulWait
+
+		// MCP stdio shutdown starts by closing protocol input. A child that exits
+		// at this point has satisfied the requested ownership teardown even if it
+		// chooses a non-zero process status for EOF. Unexpected exits are surfaced
+		// before shutdown through Session.ensureAvailable and normal MCP errors.
 		_ = p.stdin.Close()
-		if err, ok := p.wait(p.shutdown); ok {
-			p.stopErr = err
+		if _, ok := p.wait(stdinWait); ok {
 			return
 		}
 
 		_ = gtmprocess.TerminateTreeGraceful(p.cmd)
-		if _, ok := p.wait(p.shutdown); ok {
+		if _, ok := p.wait(gracefulWait); ok {
 			return
 		}
 
 		_ = gtmprocess.TerminateTreeForce(p.cmd)
-		if _, ok := p.wait(p.shutdown); ok {
+		if _, ok := p.wait(forceWait); ok {
 			return
 		}
 		p.stopErr = errors.New("stdio MCP process tree did not exit after forced termination")
@@ -169,6 +181,16 @@ func (p *stdioProcess) shutdownProcess() error {
 }
 
 func (p *stdioProcess) wait(timeout time.Duration) (error, bool) {
+	if timeout <= 0 {
+		select {
+		case <-p.done:
+			p.mu.RLock()
+			defer p.mu.RUnlock()
+			return p.waitErr, true
+		default:
+			return nil, false
+		}
+	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
