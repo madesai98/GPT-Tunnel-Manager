@@ -24,6 +24,8 @@ jobs:
           git diff --exit-code -- go.mod go.sum
       - name: Test
         run: go test ./...
+      - name: Phase 7 discovery quality gates
+        run: go test ./internal/discovery -run '^TestSection18SearchQualityGates$' -v
       - name: Vet
         run: go vet ./...
       - name: Retrieval scale benchmarks
