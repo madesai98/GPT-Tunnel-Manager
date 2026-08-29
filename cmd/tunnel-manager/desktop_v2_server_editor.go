@@ -23,35 +23,35 @@ var v2ServerEditorState struct {
 	active    bool
 	editingID string
 
-	name          widget.Editor
-	mode          string
-	modeNext      widget.Clickable
-	transport     string
+	name       widget.Editor
+	mode       string
+	modeNext   widget.Clickable
+	transport  string
 	transportNext widget.Clickable
 
-	executable       widget.Editor
-	args             widget.Editor
-	workingDir       widget.Editor
-	url              widget.Editor
+	executable widget.Editor
+	args       widget.Editor
+	workingDir widget.Editor
+	url        widget.Editor
 	launchExecutable widget.Editor
-	launchArgs       widget.Editor
+	launchArgs widget.Editor
 	launchWorkingDir widget.Editor
 
-	authMode         widget.Clickable
-	auth             string
-	oauthScopes      widget.Editor
-	staticHeader     widget.Editor
-	staticScheme     widget.Editor
+	authMode widget.Clickable
+	auth     string
+	oauthScopes widget.Editor
+	staticHeader widget.Editor
+	staticScheme widget.Editor
 	staticCredential widget.Editor
-	allowInsecure    widget.Bool
+	allowInsecure widget.Bool
 
-	plainEnvironment  widget.Editor
+	plainEnvironment widget.Editor
 	secretEnvironment widget.Editor
-	startupTimeout    widget.Editor
-	shutdownTimeout   widget.Editor
-	idleTimeout       widget.Editor
-	logOverride       string
-	logOverrideNext   widget.Clickable
+	startupTimeout widget.Editor
+	shutdownTimeout widget.Editor
+	idleTimeout widget.Editor
+	logOverride string
+	logOverrideNext widget.Clickable
 
 	save   widget.Clickable
 	cancel widget.Clickable
@@ -264,32 +264,22 @@ func buildV2ServerEntry(ctx context.Context, u *v2DesktopUI) (v2config.ServerEnt
 		}
 	}
 	startup, err := parseV2Int(v2ServerEditorState.startupTimeout.Text(), "startup timeout", false)
-	if err != nil {
-		return v2config.ServerEntry{}, err
-	}
+	if err != nil { return v2config.ServerEntry{}, err }
 	shutdown, err := parseV2Int(v2ServerEditorState.shutdownTimeout.Text(), "shutdown timeout", false)
-	if err != nil {
-		return v2config.ServerEntry{}, err
-	}
+	if err != nil { return v2config.ServerEntry{}, err }
 	idle, err := parseV2Int(v2ServerEditorState.idleTimeout.Text(), "idle timeout", true)
-	if err != nil {
-		return v2config.ServerEntry{}, err
-	}
+	if err != nil { return v2config.ServerEntry{}, err }
 	plain, err := parseV2Environment(v2ServerEditorState.plainEnvironment.Text())
-	if err != nil {
-		return v2config.ServerEntry{}, err
-	}
+	if err != nil { return v2config.ServerEntry{}, err }
 	secretValues, err := parseV2Environment(v2ServerEditorState.secretEnvironment.Text())
-	if err != nil {
-		return v2config.ServerEntry{}, err
-	}
+	if err != nil { return v2config.ServerEntry{}, err }
 
 	entry := v2config.ServerEntry{
-		ID:          id,
-		Name:        strings.TrimSpace(v2ServerEditorState.name.Text()),
-		Mode:        v2config.ServerMode(v2ServerEditorState.mode),
+		ID: id,
+		Name: strings.TrimSpace(v2ServerEditorState.name.Text()),
+		Mode: v2config.ServerMode(v2ServerEditorState.mode),
 		Environment: v2config.EnvironmentConfig{Values: plain},
-		Runtime:     v2config.RuntimeConfig{StartupTimeoutSeconds: *startup, ShutdownTimeoutSeconds: *shutdown, IdleTimeoutSeconds: idle},
+		Runtime: v2config.RuntimeConfig{StartupTimeoutSeconds: *startup, ShutdownTimeoutSeconds: *shutdown, IdleTimeoutSeconds: idle},
 	}
 	if v2ServerEditorState.logOverride != "inherit" {
 		value := v2ServerEditorState.logOverride
@@ -299,31 +289,27 @@ func buildV2ServerEntry(ctx context.Context, u *v2DesktopUI) (v2config.ServerEnt
 	switch v2config.TransportType(v2ServerEditorState.transport) {
 	case v2config.TransportStdio:
 		entry.Transport = v2config.TransportConfig{Type: v2config.TransportStdio, Stdio: &v2config.StdioTransport{
-			Executable:       strings.TrimSpace(v2ServerEditorState.executable.Text()),
-			Args:             strings.Fields(v2ServerEditorState.args.Text()),
+			Executable: strings.TrimSpace(v2ServerEditorState.executable.Text()),
+			Args: strings.Fields(v2ServerEditorState.args.Text()),
 			WorkingDirectory: strings.TrimSpace(v2ServerEditorState.workingDir.Text()),
 		}}
 	case v2config.TransportManagedHTTP:
 		entry.Transport = v2config.TransportConfig{Type: v2config.TransportManagedHTTP, ManagedHTTP: &v2config.ManagedHTTPTransport{
 			URL: strings.TrimSpace(v2ServerEditorState.url.Text()),
 			Launch: v2config.LaunchConfig{
-				Executable:       strings.TrimSpace(v2ServerEditorState.launchExecutable.Text()),
-				Args:             strings.Fields(v2ServerEditorState.launchArgs.Text()),
+				Executable: strings.TrimSpace(v2ServerEditorState.launchExecutable.Text()),
+				Args: strings.Fields(v2ServerEditorState.launchArgs.Text()),
 				WorkingDirectory: strings.TrimSpace(v2ServerEditorState.launchWorkingDir.Text()),
 			},
 			AllowInsecureCredentialTransport: v2ServerEditorState.allowInsecure.Value,
 		}}
-		if err := applyV2EditorAuth(ctx, u, &entry); err != nil {
-			return v2config.ServerEntry{}, err
-		}
+		if err := applyV2EditorAuth(ctx, u, &entry); err != nil { return v2config.ServerEntry{}, err }
 	case v2config.TransportExternalHTTP:
 		entry.Transport = v2config.TransportConfig{Type: v2config.TransportExternalHTTP, ExternalHTTP: &v2config.ExternalHTTPTransport{
-			URL:                              strings.TrimSpace(v2ServerEditorState.url.Text()),
+			URL: strings.TrimSpace(v2ServerEditorState.url.Text()),
 			AllowInsecureCredentialTransport: v2ServerEditorState.allowInsecure.Value,
 		}}
-		if err := applyV2EditorAuth(ctx, u, &entry); err != nil {
-			return v2config.ServerEntry{}, err
-		}
+		if err := applyV2EditorAuth(ctx, u, &entry); err != nil { return v2config.ServerEntry{}, err }
 	default:
 		return v2config.ServerEntry{}, errors.New("unsupported transport type")
 	}
@@ -396,7 +382,7 @@ func v2ServerEditorPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-				layout.Flexed(1, sectionTitle(u.th, map[bool]string{true: "Edit MCP Server", false: "Add MCP Server"}[v2ServerEditorState.editingID != ""])),
+				layout.Flexed(1, sectionTitle(u.th, map[bool]string{true:"Edit MCP Server", false:"Add MCP Server"}[v2ServerEditorState.editingID != ""])),
 				layout.Rigid(secondaryButton(u.th, &v2ServerEditorState.cancel, "Cancel")),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
 				layout.Rigid(primaryButton(u.th, &v2ServerEditorState.save, "Save Server")),
@@ -409,41 +395,25 @@ func v2ServerEditorPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 				return card(func(gtx layout.Context) layout.Dimensions {
 					children := []layout.FlexChild{
 						layout.Rigid(sectionTitle(u.th, "Identity & lifecycle")),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.name, "Server name"))
-						}),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, secondaryButton(u.th, &v2ServerEditorState.modeNext, "Mode: "+strings.ToUpper(v2ServerEditorState.mode)))
-						}),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, secondaryButton(u.th, &v2ServerEditorState.transportNext, "Transport: "+strings.ToUpper(v2ServerEditorState.transport)))
-						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.name, "Server name")) }),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, secondaryButton(u.th, &v2ServerEditorState.modeNext, "Mode: "+strings.ToUpper(v2ServerEditorState.mode))) }),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, secondaryButton(u.th, &v2ServerEditorState.transportNext, "Transport: "+strings.ToUpper(v2ServerEditorState.transport))) }),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(14)}.Layout(gtx) }),
 						layout.Rigid(sectionTitle(u.th, "Transport")),
 					}
 					if v2ServerEditorState.transport == string(v2config.TransportStdio) {
 						children = append(children,
 							layout.Rigid(editorSurface(u.th, &v2ServerEditorState.executable, "Executable")),
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.args, "Arguments"))
-							}),
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.workingDir, "Working directory (optional)"))
-							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.args, "Arguments")) }),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.workingDir, "Working directory (optional)")) }),
 						)
 					} else {
 						children = append(children, layout.Rigid(editorSurface(u.th, &v2ServerEditorState.url, "MCP HTTP URL")))
 						if isManagedHTTP {
 							children = append(children,
-								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-									return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.launchExecutable, "Managed server executable"))
-								}),
-								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-									return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.launchArgs, "Managed server arguments"))
-								}),
-								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-									return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.launchWorkingDir, "Managed server working directory"))
-								}),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.launchExecutable, "Managed server executable")) }),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.launchArgs, "Managed server arguments")) }),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.launchWorkingDir, "Managed server working directory")) }),
 							)
 						}
 					}
@@ -454,21 +424,13 @@ func v2ServerEditorPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 							layout.Rigid(secondaryButton(u.th, &v2ServerEditorState.authMode, "Auth: "+strings.ToUpper(v2ServerEditorState.auth))),
 						)
 						if v2ServerEditorState.auth == string(v2config.HTTPAuthOAuth) {
-							children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.oauthScopes, "OAuth scopes, separated by spaces"))
-							}))
+							children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.oauthScopes, "OAuth scopes, separated by spaces")) }))
 						}
 						if v2ServerEditorState.auth == string(v2config.HTTPAuthStatic) {
 							children = append(children,
-								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-									return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.staticHeader, "Header name"))
-								}),
-								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-									return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.staticScheme, "Scheme, e.g. Bearer (optional)"))
-								}),
-								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-									return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.staticCredential, "Credential (leave blank to keep stored value)"))
-								}),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.staticHeader, "Header name")) }),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.staticScheme, "Scheme, e.g. Bearer (optional)")) }),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.staticCredential, "Credential (leave blank to keep stored value)")) }),
 							)
 						}
 						children = append(children, layout.Rigid(material.CheckBox(u.th, &v2ServerEditorState.allowInsecure, "Allow credential transport over non-HTTPS remote HTTP").Layout))
@@ -477,21 +439,13 @@ func v2ServerEditorPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(14)}.Layout(gtx) }),
 						layout.Rigid(sectionTitle(u.th, "Environment")),
 						layout.Rigid(editorSurface(u.th, &v2ServerEditorState.plainEnvironment, "Plain variables, one NAME=value per line")),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.secretEnvironment, "Secret variables, one NAME=value per line; existing secrets can be NAME="))
-						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.secretEnvironment, "Secret variables, one NAME=value per line; existing secrets can be NAME=")) }),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(14)}.Layout(gtx) }),
 						layout.Rigid(sectionTitle(u.th, "Runtime")),
 						layout.Rigid(editorSurface(u.th, &v2ServerEditorState.startupTimeout, "Startup timeout seconds")),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.shutdownTimeout, "Shutdown timeout seconds"))
-						}),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.idleTimeout, "Managed idle timeout seconds (blank = Manager default)"))
-						}),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, secondaryButton(u.th, &v2ServerEditorState.logOverrideNext, "Log capture: "+strings.ToUpper(v2ServerEditorState.logOverride)))
-						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.shutdownTimeout, "Shutdown timeout seconds")) }),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2ServerEditorState.idleTimeout, "Managed idle timeout seconds (blank = Manager default)")) }),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, secondaryButton(u.th, &v2ServerEditorState.logOverrideNext, "Log capture: "+strings.ToUpper(v2ServerEditorState.logOverride))) }),
 					)
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 				})(gtx)

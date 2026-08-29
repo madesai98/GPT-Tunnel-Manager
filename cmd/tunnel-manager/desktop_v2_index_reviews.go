@@ -98,9 +98,7 @@ func v2IndexReviewPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 					layout.Rigid(card(func(gtx layout.Context) layout.Dimensions {
 						return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 							layout.Rigid(sectionTitle(u.th, "Routing catalog")),
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, mutedCaption(u.th, fmt.Sprintf("Active generation: %s", status.ActiveGenerationID)))
-							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, mutedCaption(u.th, fmt.Sprintf("Active generation: %s", status.ActiveGenerationID))) }),
 							layout.Rigid(mutedCaption(u.th, fmt.Sprintf("Staging generation: %s", status.StagingGenerationID))),
 							layout.Rigid(mutedCaption(u.th, fmt.Sprintf("Ready: %t · pending required: %d · open reviews: %d · accepted required: %d", status.Ready, status.PendingRequired, status.OpenReviews, status.AcceptedRequired))),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -118,9 +116,7 @@ func v2IndexReviewPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 					layout.Rigid(card(func(gtx layout.Context) layout.Dimensions {
 						rows := []layout.FlexChild{
 							layout.Rigid(sectionTitle(u.th, fmt.Sprintf("Agent enrichment blockers (%d)", len(toolBatches)+len(capabilityBatches)))),
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(4)}.Layout(gtx, mutedCaption(u.th, "Required enrichment batches are intentionally completed by connected agents through the Manager MCP batch APIs. They block promotion until accepted."))
-							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(4)}.Layout(gtx, mutedCaption(u.th, "Required enrichment batches are intentionally completed by connected agents through the Manager MCP batch APIs. They block promotion until accepted.")) }),
 						}
 						for _, batch := range append(toolBatches, capabilityBatches...) {
 							b := batch
@@ -170,9 +166,7 @@ func v2IndexReviewPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 										children = append(children, layout.Rigid(faintCaption(u.th, "Competing: "+strings.Join(request.Proposal.CompetingTools, ", "))))
 									}
 									children = append(children,
-										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-											return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &actions.preferenceIDs, "Preference IDs, separated by commas (optional)"))
-										}),
+										layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &actions.preferenceIDs, "Preference IDs, separated by commas (optional)")) }),
 										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 											return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 												return layout.Flex{}.Layout(gtx,

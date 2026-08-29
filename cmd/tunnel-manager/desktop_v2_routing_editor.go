@@ -42,9 +42,9 @@ var v2RoutingEditorState struct {
 	ruleProfileNext  widget.Clickable
 	specificity      routingprefs.Specificity
 	specificityNext  widget.Clickable
-	subject          widget.Editor
-	condition        widget.Editor
-	addRule          widget.Clickable
+	subject           widget.Editor
+	condition         widget.Editor
+	addRule           widget.Clickable
 
 	targetChoices  map[string]*v2RoutingTargetChoice
 	ruleActions    map[string]*v2RoutingRuleActions
@@ -196,15 +196,9 @@ func v2RoutingProfilesCard(u *v2DesktopUI, prefs coreapp.V2PreferenceSnapshot, d
 	return card(func(gtx layout.Context) layout.Dimensions {
 		rows := []layout.FlexChild{
 			layout.Rigid(sectionTitle(u.th, fmt.Sprintf("Profiles · revision %d", prefs.PreferenceRevision))),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2RoutingEditorState.profileName, "New profile name"))
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2RoutingEditorState.profileDescription, "Description (optional)"))
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, primaryButton(u.th, &v2RoutingEditorState.addProfile, "Add Profile"))
-			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2RoutingEditorState.profileName, "New profile name")) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2RoutingEditorState.profileDescription, "Description (optional)")) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, primaryButton(u.th, &v2RoutingEditorState.addProfile, "Add Profile")) }),
 		}
 		defaultText := "Default profile: global"
 		if defaultProfile != "" {
@@ -259,29 +253,17 @@ func v2RoutingAddRuleCard(u *v2DesktopUI, prefs coreapp.V2PreferenceSnapshot, ta
 	return card(func(gtx layout.Context) layout.Dimensions {
 		rows := []layout.FlexChild{
 			layout.Rigid(sectionTitle(u.th, "Add preference")),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, secondaryButton(u.th, &v2RoutingEditorState.ruleProfileNext, "Profile: "+v2RoutingProfileLabel(prefs.Profiles)))
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, secondaryButton(u.th, &v2RoutingEditorState.specificityNext, "Specificity: "+strings.ToUpper(string(v2RoutingEditorState.specificity))))
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2RoutingEditorState.subject, "Subject key"))
-			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, secondaryButton(u.th, &v2RoutingEditorState.ruleProfileNext, "Profile: "+v2RoutingProfileLabel(prefs.Profiles))) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, secondaryButton(u.th, &v2RoutingEditorState.specificityNext, "Specificity: "+strings.ToUpper(string(v2RoutingEditorState.specificity)))) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2RoutingEditorState.subject, "Subject key")) }),
 		}
 		if v2RoutingEditorState.specificity == routingprefs.SpecificityConditionalTool {
-			rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2RoutingEditorState.condition, "Condition"))
-			}))
+			rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &v2RoutingEditorState.condition, "Condition")) }))
 		}
 		if len(targets) == 0 {
-			rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, mutedCaption(u.th, "Build an index first to make authoritative routing targets available."))
-			}))
+			rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, mutedCaption(u.th, "Build an index first to make authoritative routing targets available.")) }))
 		} else {
-			rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, mutedCaption(u.th, "Authoritative targets:"))
-			}))
+			rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, mutedCaption(u.th, "Authoritative targets:")) }))
 			for _, target := range targets {
 				target := target
 				key := v2RoutingTargetKey(target)
@@ -306,9 +288,7 @@ func v2RoutingAddRuleCard(u *v2DesktopUI, prefs coreapp.V2PreferenceSnapshot, ta
 				}))
 			}
 		}
-		rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, primaryButton(u.th, &v2RoutingEditorState.addRule, "Save Preference"))
-		}))
+		rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, primaryButton(u.th, &v2RoutingEditorState.addRule, "Save Preference")) }))
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
 	})
 }
