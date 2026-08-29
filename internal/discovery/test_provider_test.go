@@ -18,7 +18,7 @@ func (s staticState) Snapshot(context.Context) (routingstate.Snapshot, error) { 
 type semanticProvider struct{ identity embedding.Identity }
 
 func newSemanticProvider() *semanticProvider {
-	dimensions := 7
+	dimensions := 8
 	return &semanticProvider{identity: embedding.Identity{
 		Provider: "test", BaseURL: "https://embedding.invalid/v1", Model: "phase7", Dimensions: &dimensions, Protocol: embedding.IdentityVersion,
 	}}
@@ -32,10 +32,12 @@ func (p *semanticProvider) Embed(_ context.Context, inputs []string) ([][]float3
 		text := strings.ToLower(input)
 		dimension := 6
 		switch {
-		case containsAny(text, "code", "repository", "repositories", "repo", "symbol", "symbols"):
-			dimension = 0
+		case containsAny(text, "symbol", "symbols", "function", "functions", "type", "types", "named"):
+			dimension = 7
 		case containsAny(text, "issue", "ticket", "bug"):
 			dimension = 1
+		case containsAny(text, "code", "repository", "repositories", "repo"):
+			dimension = 0
 		case containsAny(text, "calendar", "event", "meeting", "schedule"):
 			dimension = 2
 		case containsAny(text, "email", "mail", "message", "inbox"):
@@ -45,7 +47,7 @@ func (p *semanticProvider) Embed(_ context.Context, inputs []string) ([][]float3
 		case containsAny(text, "file", "filesystem", "path", "document"):
 			dimension = 5
 		}
-		vectors[index] = basisVector(7, dimension)
+		vectors[index] = basisVector(8, dimension)
 	}
 	return vectors, nil
 }
