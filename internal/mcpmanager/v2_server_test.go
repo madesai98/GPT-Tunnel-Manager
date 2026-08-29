@@ -58,9 +58,7 @@ func TestV2ManagerModernContractAndWorkflow(t *testing.T) {
 		t.Fatalf("tool enrichment batch output = %#v", toolBatchOut)
 	}
 	var toolRequest enrichment.ToolBatchRequest
-	if err := json.Unmarshal(toolBatchOut.Batches[0].RequestJSON, &toolRequest); err != nil {
-		t.Fatalf("decode tool enrichment request: %v", err)
-	}
+	decodePhase10Value(t, toolBatchOut.Batches[0].Request, &toolRequest)
 	if len(toolRequest.Items) != 1 || toolRequest.Items[0].Tool.ToolName != "echo" {
 		t.Fatalf("tool enrichment request = %#v", toolRequest)
 	}
@@ -93,9 +91,7 @@ func TestV2ManagerModernContractAndWorkflow(t *testing.T) {
 		t.Fatalf("capability batch output = %#v", capabilityBatchOut)
 	}
 	var capabilityRequest enrichment.CapabilityBatchRequest
-	if err := json.Unmarshal(capabilityBatchOut.Batches[0].RequestJSON, &capabilityRequest); err != nil {
-		t.Fatalf("decode capability request: %v", err)
-	}
+	decodePhase10Value(t, capabilityBatchOut.Batches[0].Request, &capabilityRequest)
 	members := make([]string, 0, len(capabilityRequest.Items))
 	for _, item := range capabilityRequest.Items {
 		members = append(members, item.Tool.MemberKey)
@@ -328,12 +324,17 @@ func callPhase10Tool(t *testing.T, session *mcp.ClientSession, name string, argu
 
 func decodePhase10Structured(t *testing.T, result *mcp.CallToolResult, out any) {
 	t.Helper()
-	body, err := json.Marshal(result.StructuredContent)
+	decodePhase10Value(t, result.StructuredContent, out)
+}
+
+func decodePhase10Value(t *testing.T, value any, out any) {
+	t.Helper()
+	body, err := json.Marshal(value)
 	if err != nil {
-		t.Fatalf("marshal structured content: %v", err)
+		t.Fatalf("marshal JSON value: %v", err)
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		t.Fatalf("decode structured content %s: %v", body, err)
+		t.Fatalf("decode JSON value %s: %v", body, err)
 	}
 }
 
