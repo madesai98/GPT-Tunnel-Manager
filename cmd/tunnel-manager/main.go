@@ -15,11 +15,10 @@ import (
 
 	coreapp "github.com/madesai98/GPT-Tunnel-Manager/internal/app"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/buildinfo"
-	"github.com/madesai98/GPT-Tunnel-Manager/internal/config"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/instance"
-	"github.com/madesai98/GPT-Tunnel-Manager/internal/marker"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/portable"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/secrets"
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/v2config"
 )
 
 func main() {
@@ -51,20 +50,14 @@ func run(args []string) error {
 			if err := portable.EnsureWritable(root); err != nil {
 				return err
 			}
-			_, _, err := config.NewStore(root).LoadOrCreate()
+			_, _, err := v2config.NewStore(root).LoadOrCreate()
 			return err
 		case "validate":
-			_, _, err := config.NewStore(root).LoadOrCreate()
+			_, _, err := v2config.NewStore(root).LoadOrCreate()
 			if err == nil {
 				fmt.Println("configuration valid")
 			}
 			return err
-		case "marker":
-			if len(args) != 2 {
-				return errors.New("usage: tunnel-manager marker <server-id>")
-			}
-			fmt.Println(marker.Generate(args[1]))
-			return nil
 		case "secret":
 			return secretCommand(root, args[1:])
 		}
@@ -97,29 +90,31 @@ func run(args []string) error {
 		cancel()
 	}()
 
-	app, err := coreapp.New(root, exe)
+	application, err := coreapp.NewV2App(context.Background(), root)
 	if err != nil {
 		return err
 	}
-	if err := app.Start(); err != nil {
+	defer application.Close()
+	if err := application.Start(context.Background()); err != nil {
 		return err
 	}
 	if *noGUI {
-		fmt.Println("GPT Tunnel Manager MCP:", app.ManagerMCPURL())
-		return runHeadless(app)
+		fmt.Println("GPT Tunnel Manager MCP:", application.ManagerSnapshot().MCPURL)
+		return runHeadless(application)
 	}
-	return runDesktop(app, owner.SetFocus)
+	return runDesktopV2(application, owner.SetFocus)
 }
 
-func runHeadless(app *coreapp.App) error {
+func runHeadless(application *coreapp.V2App) error {
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
 	select {
 	case <-signals:
-		app.RequestShutdown()
-	case <-app.Done():
+		application.RequestShutdown()
+	case <-application.Done():
 	}
-	<-app.Done()
+	<-application.Done()
 	return nil
 }
 
