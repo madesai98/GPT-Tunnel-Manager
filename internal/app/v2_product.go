@@ -160,14 +160,13 @@ func (p *v2ProductRuntime) restartManagerTunnel(a *V2App) {
 	p.log.Redactor().Register(credential)
 
 	runtime, err := tunnelclient.Start(ctx, tunnelclient.RunSpec{
-		Binary:              active.Path,
-		TunnelID:            cfg.ManagerTunnel.TunnelID,
-		APIKey:              string(credential),
-		MCPURL:              a.ManagerSnapshot().MCPURL,
-		HealthDir:           filepath.Join(p.root, "data", "tunnel-client", "state", "manager"),
-		StartupTimeout:      30 * time.Second,
-		ShutdownTimeout:     10 * time.Second,
-		TelemetryCompatible: false,
+		Binary:          active.Path,
+		TunnelID:        cfg.ManagerTunnel.TunnelID,
+		APIKey:          string(credential),
+		MCPURL:          a.ManagerSnapshot().MCPURL,
+		HealthDir:       filepath.Join(p.root, "data", "tunnel-client", "state", "manager"),
+		StartupTimeout:  30 * time.Second,
+		ShutdownTimeout: 10 * time.Second,
 		OnLog: func(stream, line string) {
 			p.log.Log(logging.Info, "Manager", "Tunnel Client", line, map[string]any{"stream": stream})
 		},
@@ -468,7 +467,6 @@ func (p *v2ProductRuntime) updaterLoop(a *V2App) {
 				if _, err := a.InstallTunnelClientUpdate(a.ctx); err != nil {
 					p.log.Log(logging.Warn, "Manager", "Updater", "automatic update failed", map[string]any{"error": err.Error()})
 				}
-			}
 		}
 		delay := time.Duration(cfg.UpdateCheckIntervalHours) * time.Hour
 		if delay <= 0 {
