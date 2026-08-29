@@ -23,6 +23,7 @@ type v2ReviewActions struct {
 }
 
 var v2IndexReviewState struct {
+	scroll  layout.List
 	actions map[string]*v2ReviewActions
 }
 
@@ -91,8 +92,8 @@ func v2IndexReviewPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			var list layout.List
-			return list.Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+			v2IndexReviewState.scroll.Axis = layout.Vertical
+			return v2IndexReviewState.scroll.Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
 				children := []layout.FlexChild{
 					layout.Rigid(card(func(gtx layout.Context) layout.Dimensions {
 						return layout.Flex{Axis: layout.Vertical}.Layout(gtx,

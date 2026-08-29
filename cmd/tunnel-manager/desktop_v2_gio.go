@@ -39,8 +39,9 @@ type v2DesktopUI struct {
 	win  *gioapp.Window
 	th   *material.Theme
 
-	page string
-	list widget.List
+	page           string
+	list           widget.List
+	settingsScroll layout.List
 
 	serversNav  widget.Clickable
 	indexNav    widget.Clickable
@@ -483,7 +484,9 @@ func (u *v2DesktopUI) settingsPage(gtx layout.Context) layout.Dimensions {
 	}
 	credentialStatus := "not configured"
 	if u.core.EmbeddingCredentialConfigured(context.Background()) { credentialStatus = "configured" }
-	return card(func(gtx layout.Context) layout.Dimensions {
+	u.settingsScroll.Axis = layout.Vertical
+	return u.settingsScroll.Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+		return card(func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(sectionTitle(u.th, "Local Manager")),
 			layout.Rigid(material.CheckBox(u.th, &u.protection, "Require local Manager capability").Layout),
@@ -501,7 +504,8 @@ func (u *v2DesktopUI) settingsPage(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(14)}.Layout(gtx, primaryButton(u.th, &u.saveSettings, "Save Manager & Embedding Settings")) }),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return v2ProductSettingsSection(u, gtx) }),
 		)
-	})(gtx)
+		})(gtx)
+	})
 }
 
 func (u *v2DesktopUI) logsPage(gtx layout.Context) layout.Dimensions { return v2LogsPage(u, gtx) }

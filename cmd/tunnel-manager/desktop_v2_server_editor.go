@@ -57,6 +57,7 @@ var v2ServerEditorState struct {
 	cancel widget.Clickable
 	add    widget.Clickable
 
+	scroll   layout.List
 	editRows map[string]*widget.Clickable
 }
 
@@ -106,6 +107,7 @@ func cycleV2Value(current string, values []string) string {
 func openNewV2ServerEditor() {
 	initV2ServerEditorWidgets()
 	v2ServerEditorState.active = true
+	v2ServerEditorState.scroll.Position = layout.Position{}
 	v2ServerEditorState.editingID = ""
 	v2ServerEditorState.name.SetText("")
 	v2ServerEditorState.mode = string(v2config.ModeManaged)
@@ -388,8 +390,8 @@ func v2ServerEditorPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			var list layout.List
-			return list.Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+			v2ServerEditorState.scroll.Axis = layout.Vertical
+			return v2ServerEditorState.scroll.Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
 				return card(func(gtx layout.Context) layout.Dimensions {
 					children := []layout.FlexChild{
 						layout.Rigid(sectionTitle(u.th, "Identity & lifecycle")),

@@ -49,6 +49,7 @@ var v2RoutingEditorState struct {
 	targetChoices  map[string]*v2RoutingTargetChoice
 	ruleActions    map[string]*v2RoutingRuleActions
 	profileActions map[string]*v2RoutingProfileActions
+	scroll         layout.List
 	initialized    bool
 }
 
@@ -179,8 +180,8 @@ func v2RoutingEditorPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 	}
 
 	manager := u.core.ManagerConfig()
-	var list layout.List
-	return list.Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
+	v2RoutingEditorState.scroll.Axis = layout.Vertical
+	return v2RoutingEditorState.scroll.Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(v2RoutingProfilesCard(u, prefs, manager.Routing.DefaultProfile)),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
