@@ -32,13 +32,14 @@ const (
 )
 
 type oauthSession struct {
-	ClientID     string        `json:"client_id"`
-	ClientSecret string        `json:"client_secret,omitempty"`
-	AuthURL      string        `json:"auth_url"`
-	TokenURL     string        `json:"token_url"`
-	RedirectURL  string        `json:"redirect_url"`
-	Scopes       []string      `json:"scopes,omitempty"`
-	Token        *oauth2.Token `json:"token"`
+	ClientID     string           `json:"client_id"`
+	ClientSecret string           `json:"client_secret,omitempty"`
+	AuthURL      string           `json:"auth_url"`
+	TokenURL     string           `json:"token_url"`
+	AuthStyle    oauth2.AuthStyle `json:"auth_style,omitempty"`
+	RedirectURL  string           `json:"redirect_url"`
+	Scopes       []string         `json:"scopes,omitempty"`
+	Token        *oauth2.Token    `json:"token"`
 }
 
 type NativeOAuthProvider struct {
@@ -73,9 +74,17 @@ func ClearOAuthSession(ctx context.Context, store secrets.Store, serverID string
 		return errors.New("OAuth secret store is required")
 	}
 	return errors.Join(
-		store.Delete(ctx, OAuthSessionSecretRef(serverID)),
-		store.Delete(ctx, OAuthInteractiveSecretRef(serverID)),
+		deleteOAuthSecretIfPresent(ctx, store, OAuthSessionSecretRef(serverID)),
+		deleteOAuthSecretIfPresent(ctx, store, OAuthInteractiveSecretRef(serverID)),
 	)
+}
+
+func deleteOAuthSecretIfPresent(ctx context.Context, store secrets.Store, ref string) error {
+	err := store.Delete(ctx, ref)
+	if errors.Is(err, secrets.ErrNotFound) {
+		return nil
+	}
+	return err
 }
 
 func OAuthConnected(ctx context.Context, store secrets.Store, serverID string) bool {
@@ -126,13 +135,24 @@ func (p *NativeOAuthProvider) Handler(ctx context.Context, serverID string, cfg 
 		RequestRefreshToken:      true,
 	}
 	if hasSession {
-		handlerCfg.PreregisteredClient = &oauthex.ClientCredentials{ClientID: session.ClientID, ClientSecret: session.ClientSecret}
+		credentials := &oauthex.ClientCredentials{ClientID: session.ClientID}
+		if session.ClientSecret != "" {
+			credentials.ClientSecretAuth = &oauthex.ClientSecretAuth{ClientSecret: session.ClientSecret}
+		}
+		handlerCfg.PreregisteredClient = credentials
 		oauthCfg := &oauth2.Config{
 			ClientID: session.ClientID, ClientSecret: session.ClientSecret,
-			Endpoint: oauth2.Endpoint{AuthURL: session.AuthURL, TokenURL: session.TokenURL},
+			Endpoint: oauth2.Endpoint{AuthURL: session.AuthURL, TokenURL: session.TokenURL, AuthStyle: session.AuthStyle},
 			RedirectURL: session.RedirectURL, Scopes: append([]string(nil), session.Scopes...),
 		}
-		handlerCfg.InitialTokenSource = oauthCfg.TokenSource(ctx, session.Token)
+		next := session
+		handlerCfg.InitialTokenSource = &persistingOAuthTokenSource{
+			base: oauthCfg.TokenSource(ctx, session.Token),
+			save: func(refreshed *oauth2.Token) error {
+				next.Token = refreshed
+				return p.saveSession(context.Background(), serverID, next)
+			},
+		}
 	} else {
 		handlerCfg.DynamicClientRegistrationConfig = &auth.DynamicClientRegistrationConfig{Metadata: &oauthex.ClientRegistrationMetadata{
 			RedirectURIs: []string{redirectURL},
@@ -148,13 +168,13 @@ func (p *NativeOAuthProvider) Handler(ctx context.Context, serverID string, cfg 
 		}
 		next := oauthSession{
 			ClientID: oauthCfg.ClientID, ClientSecret: oauthCfg.ClientSecret,
-			AuthURL: oauthCfg.Endpoint.AuthURL, TokenURL: oauthCfg.Endpoint.TokenURL,
+			AuthURL: oauthCfg.Endpoint.AuthURL, TokenURL: oauthCfg.Endpoint.TokenURL, AuthStyle: oauthCfg.Endpoint.AuthStyle,
 			RedirectURL: oauthCfg.RedirectURL, Scopes: append([]string(nil), oauthCfg.Scopes...), Token: token,
 		}
 		if err := p.saveSession(tokenCtx, serverID, next); err != nil {
 			return nil, err
 		}
-		_ = p.secrets.Delete(tokenCtx, OAuthInteractiveSecretRef(serverID))
+		_ = deleteOAuthSecretIfPresent(tokenCtx, p.secrets, OAuthInteractiveSecretRef(serverID))
 		return &persistingOAuthTokenSource{
 			base: oauthCfg.TokenSource(tokenCtx, token),
 			save: func(refreshed *oauth2.Token) error {
@@ -193,14 +213,20 @@ func (p *NativeOAuthProvider) authorizationFetcher(serverID string, armed bool, 
 			query := r.URL.Query()
 			if oauthErr := query.Get("error"); oauthErr != "" {
 				detail := query.Get("error_description")
-				select { case errCh <- fmt.Errorf("OAuth authorization failed: %s %s", oauthErr, detail): default: }
+				select {
+				case errCh <- fmt.Errorf("OAuth authorization failed: %s %s", oauthErr, detail):
+				default:
+				}
 				http.Error(w, "OAuth authorization failed. You can close this window.", http.StatusBadRequest)
 				return
 			}
 			code := query.Get("code")
 			state := query.Get("state")
 			if code == "" || state == "" {
-				select { case errCh <- errors.New("OAuth callback omitted code or state"): default: }
+				select {
+				case errCh <- errors.New("OAuth callback omitted code or state"):
+				default:
+				}
 				http.Error(w, "OAuth callback was incomplete. You can close this window.", http.StatusBadRequest)
 				return
 			}
@@ -214,7 +240,10 @@ func (p *NativeOAuthProvider) authorizationFetcher(serverID string, armed bool, 
 		go func() {
 			err := server.Serve(listener)
 			if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-				select { case errCh <- err: default: }
+				select {
+				case errCh <- err:
+				default:
+				}
 			}
 		}()
 		if err := p.openURL(ctx, args.URL); err != nil {
@@ -298,11 +327,12 @@ func OAuthSessionIdentity(ctx context.Context, store secrets.Store, serverID str
 		return nil, err
 	}
 	identity := struct {
-		ClientID string   `json:"client_id"`
-		AuthURL  string   `json:"auth_url"`
-		TokenURL string   `json:"token_url"`
-		Scopes   []string `json:"scopes,omitempty"`
-	}{session.ClientID, session.AuthURL, session.TokenURL, append([]string(nil), session.Scopes...)}
+		ClientID  string           `json:"client_id"`
+		AuthURL   string           `json:"auth_url"`
+		TokenURL  string           `json:"token_url"`
+		AuthStyle oauth2.AuthStyle `json:"auth_style,omitempty"`
+		Scopes    []string         `json:"scopes,omitempty"`
+	}{session.ClientID, session.AuthURL, session.TokenURL, session.AuthStyle, append([]string(nil), session.Scopes...)}
 	return json.Marshal(identity)
 }
 
