@@ -16,12 +16,14 @@ type ToolSnapshot struct {
 }
 
 func (s ToolSnapshot) Clone() ToolSnapshot {
+	// Fingerprint the cloned representation itself. MCP Tool contains
+	// interface-backed JSON schema values, so a JSON deep-clone may normalize
+	// their representation. Carrying the pre-clone fingerprint across that
+	// normalization breaks the invariant that Fingerprint describes Tools and
+	// can cause a later authoritative/live comparison to report false drift.
 	fingerprint, tools, err := toolcontract.FingerprintTools(s.Tools)
 	if err != nil {
 		return ToolSnapshot{Fingerprint: s.Fingerprint}
-	}
-	if s.Fingerprint != "" {
-		fingerprint = s.Fingerprint
 	}
 	return ToolSnapshot{Tools: tools, Fingerprint: fingerprint}
 }
@@ -37,19 +39,9 @@ func SnapshotTools(ctx context.Context, session *mcp.ClientSession) (ToolSnapsho
 		}
 		tools = append(tools, tool)
 	}
-	// The first pass clones the SDK's wire representation into the exact Tool
-	// shape that the Manager persists in the authoritative catalog. Fingerprint
-	// that persisted shape on a second pass so a later catalog decode/re-encode
-	// produces the same aggregate server fingerprint. Without this stabilization,
-	// interface-backed nested schemas can serialize differently before and after
-	// one JSON round-trip and be mistaken for live contract drift.
-	_, canonical, err := toolcontract.FingerprintTools(tools)
+	fingerprint, canonical, err := toolcontract.FingerprintTools(tools)
 	if err != nil {
 		return ToolSnapshot{}, err
 	}
-	fingerprint, stable, err := toolcontract.FingerprintTools(canonical)
-	if err != nil {
-		return ToolSnapshot{}, err
-	}
-	return ToolSnapshot{Tools: stable, Fingerprint: fingerprint}, nil
+	return ToolSnapshot{Tools: canonical, Fingerprint: fingerprint}, nil
 }
