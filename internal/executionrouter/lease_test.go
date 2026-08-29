@@ -3,7 +3,9 @@ package executionrouter
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/downstream"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/toolcontract"
@@ -29,11 +31,11 @@ func (e classifiedProviderError) ExecutionRetryable() bool { return e.retryable 
 func TestExecuteReleasesLifecycleLeaseOnEveryPostAcquisitionPath(t *testing.T) {
 	tool := toolForClass(t, toolcontract.ExecutorReadOnlyClosed, basicSchema())
 	tests := []struct {
-		name       string
-		configure  func(*testing.T, *fixture, *releasingSession)
-		maxResult  int
-		wantCode   string
-		wantCalls  int
+		name      string
+		configure func(*testing.T, *fixture, *releasingSession)
+		maxResult int
+		wantCode  string
+		wantCalls int
 	}{
 		{
 			name: "success",
@@ -140,19 +142,22 @@ type cancellationLeasedSession struct {
 	snapshot downstream.ToolSnapshot
 	releases int
 	calls    int
+	started  chan struct{}
+	once     sync.Once
 }
 
 func (s *cancellationLeasedSession) InitialTools() downstream.ToolSnapshot { return s.snapshot.Clone() }
 func (s *cancellationLeasedSession) Release()                             { s.releases++ }
 func (s *cancellationLeasedSession) CallTool(ctx context.Context, _ *mcp.CallToolParams) (*mcp.CallToolResult, error) {
 	s.calls++
+	s.once.Do(func() { close(s.started) })
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
 
 func TestExecuteCancellationStillReleasesLifecycleLease(t *testing.T) {
 	f := newFixture(t, toolForClass(t, toolcontract.ExecutorReadOnlyClosed, basicSchema()), nil, 0)
-	leased := &cancellationLeasedSession{snapshot: f.session.snapshot}
+	leased := &cancellationLeasedSession{snapshot: f.session.snapshot, started: make(chan struct{})}
 	service, err := NewService(f.catalog, f.tracker, f.handles, SessionProviderFunc(func(context.Context, string) (Session, error) {
 		return leased, nil
 	}), Options{})
@@ -160,8 +165,24 @@ func TestExecuteCancellationStillReleasesLifecycleLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	failureCh := make(chan *ExecutionError, 1)
+	go func() {
+		_, failure := service.Execute(ctx, f.class, Input{ExecutionHandle: f.handle, Arguments: map[string]any{"text": "x"}})
+		failureCh <- failure
+	}()
+	select {
+	case <-leased.started:
+	case <-time.After(time.Second):
+		t.Fatal("downstream CallTool was not reached before cancellation")
+	}
 	cancel()
-	_, failure := service.Execute(ctx, f.class, Input{ExecutionHandle: f.handle, Arguments: map[string]any{"text": "x"}})
+	var failure *ExecutionError
+	select {
+	case failure = <-failureCh:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled Execute did not return")
+	}
 	if failure == nil || failure.Code != CodeDownstreamCallFailed || failure.Outcome != OutcomeUnknown {
 		t.Fatalf("cancelled post-dispatch failure = %#v", failure)
 	}
