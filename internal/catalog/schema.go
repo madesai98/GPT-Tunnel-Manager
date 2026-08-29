@@ -210,7 +210,7 @@ ON routing_preferences(profile_id, target_key);
 CREATE INDEX IF NOT EXISTS routing_preferences_review_state
 ON routing_preferences(review_state);
 
-CREATE TABLE enrichment_batches (
+CREATE TABLE IF NOT EXISTS enrichment_batches (
     batch_id TEXT PRIMARY KEY,
     generation_id TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('tool_enrichment', 'capability_reconciliation', 'ambiguity_review')),
@@ -225,7 +225,7 @@ CREATE TABLE enrichment_batches (
     UNIQUE (generation_id, kind, batch_key),
     FOREIGN KEY (generation_id) REFERENCES generations(generation_id) ON DELETE CASCADE
 );
-CREATE INDEX enrichment_batches_pending
+CREATE INDEX IF NOT EXISTS enrichment_batches_pending
 ON enrichment_batches(generation_id, kind, accepted_fingerprint, batch_key);
 `
 
