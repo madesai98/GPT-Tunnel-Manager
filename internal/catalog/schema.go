@@ -7,7 +7,7 @@ import (
 	"fmt"
 )
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 var (
 	ErrCatalogCorrupt            = errors.New("catalog is corrupt")
@@ -135,8 +135,6 @@ CREATE TABLE neighborhood_contexts (
     FOREIGN KEY (generation_id) REFERENCES generations(generation_id) ON DELETE CASCADE
 );
 
--- Phase 4 establishes storage boundaries for later retrieval without building
--- the lexical/FTS query pipeline yet.
 CREATE TABLE lexical_records (
     generation_id TEXT NOT NULL,
     member_key TEXT NOT NULL,
@@ -146,9 +144,6 @@ CREATE TABLE lexical_records (
     FOREIGN KEY (generation_id) REFERENCES generations(generation_id) ON DELETE CASCADE
 );
 
--- Routing preferences/profiles are deliberately not generation-owned. Their
--- revision is tracked in routing_state and later phases may populate these
--- payload-oriented rows without invalidating a semantic generation.
 CREATE TABLE routing_profiles (
     profile_id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -165,9 +160,29 @@ CREATE TABLE routing_preferences (
     updated_at_unix_ms INTEGER NOT NULL,
     FOREIGN KEY (profile_id) REFERENCES routing_profiles(profile_id) ON DELETE CASCADE
 );
+CREATE INDEX routing_preferences_scope_target
+ON routing_preferences(profile_id, target_key);
+CREATE INDEX routing_preferences_review_state
+ON routing_preferences(review_state);
 
--- Task/resource continuation mappings are router-owned runtime state, not
--- semantic generation membership. Later phases define the payload contract.
+CREATE TABLE enrichment_batches (
+    batch_id TEXT PRIMARY KEY,
+    generation_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('tool_enrichment', 'capability_reconciliation', 'ambiguity_review')),
+    batch_key TEXT NOT NULL,
+    required INTEGER NOT NULL CHECK (required IN (0, 1)),
+    request_fingerprint TEXT NOT NULL,
+    request_json BLOB NOT NULL,
+    accepted_fingerprint TEXT,
+    accepted_response_json BLOB,
+    created_at_unix_ms INTEGER NOT NULL,
+    accepted_at_unix_ms INTEGER,
+    UNIQUE (generation_id, kind, batch_key),
+    FOREIGN KEY (generation_id) REFERENCES generations(generation_id) ON DELETE CASCADE
+);
+CREATE INDEX enrichment_batches_pending
+ON enrichment_batches(generation_id, kind, accepted_fingerprint, batch_key);
+
 CREATE TABLE continuation_mappings (
     mapping_id TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('task', 'resource')),
@@ -189,6 +204,31 @@ CREATE TABLE source_servers (
 );
 `
 
+const migrationV3SQL = `
+CREATE INDEX routing_preferences_scope_target
+ON routing_preferences(profile_id, target_key);
+CREATE INDEX routing_preferences_review_state
+ON routing_preferences(review_state);
+
+CREATE TABLE enrichment_batches (
+    batch_id TEXT PRIMARY KEY,
+    generation_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('tool_enrichment', 'capability_reconciliation', 'ambiguity_review')),
+    batch_key TEXT NOT NULL,
+    required INTEGER NOT NULL CHECK (required IN (0, 1)),
+    request_fingerprint TEXT NOT NULL,
+    request_json BLOB NOT NULL,
+    accepted_fingerprint TEXT,
+    accepted_response_json BLOB,
+    created_at_unix_ms INTEGER NOT NULL,
+    accepted_at_unix_ms INTEGER,
+    UNIQUE (generation_id, kind, batch_key),
+    FOREIGN KEY (generation_id) REFERENCES generations(generation_id) ON DELETE CASCADE
+);
+CREATE INDEX enrichment_batches_pending
+ON enrichment_batches(generation_id, kind, accepted_fingerprint, batch_key);
+`
+
 var requiredTables = []string{
 	"routing_state",
 	"generations",
@@ -204,6 +244,7 @@ var requiredTables = []string{
 	"lexical_records",
 	"routing_profiles",
 	"routing_preferences",
+	"enrichment_batches",
 	"continuation_mappings",
 }
 
@@ -236,6 +277,12 @@ func ensureSchema(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 		version = 2
+	}
+	if version == 2 {
+		if err := applySchemaStep(ctx, db, migrationV3SQL, 3, "migrate catalog schema to v3"); err != nil {
+			return err
+		}
+		version = 3
 	}
 	if version != SchemaVersion {
 		return fmt.Errorf("%w: unsupported catalog schema version %d", ErrCatalogCorrupt, version)

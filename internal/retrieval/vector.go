@@ -69,6 +69,48 @@ func (i *VectorIndex) Len() int {
 	return len(i.records)
 }
 
+func (i *VectorIndex) Keys() []string {
+	if i == nil {
+		return nil
+	}
+	keys := make([]string, len(i.records))
+	for index, record := range i.records {
+		keys[index] = record.Key
+	}
+	return keys
+}
+
+func (i *VectorIndex) Neighbors(key string, limit int) ([]VectorResult, error) {
+	if i == nil {
+		return nil, errors.New("vector index is nil")
+	}
+	if limit < 0 {
+		return nil, errors.New("vector neighbor limit cannot be negative")
+	}
+	if limit == 0 || len(i.records) <= 1 {
+		return []VectorResult{}, nil
+	}
+	position := sort.Search(len(i.records), func(index int) bool { return i.records[index].Key >= key })
+	if position >= len(i.records) || i.records[position].Key != key {
+		return nil, fmt.Errorf("vector record %q not found", key)
+	}
+	results, err := i.Search(i.records[position].Vector, limit+1)
+	if err != nil {
+		return nil, err
+	}
+	neighbors := make([]VectorResult, 0, limit)
+	for _, result := range results {
+		if result.Key == key {
+			continue
+		}
+		neighbors = append(neighbors, result)
+		if len(neighbors) == limit {
+			break
+		}
+	}
+	return neighbors, nil
+}
+
 func (i *VectorIndex) Search(query []float32, limit int) ([]VectorResult, error) {
 	if i == nil {
 		return nil, errors.New("vector index is nil")
