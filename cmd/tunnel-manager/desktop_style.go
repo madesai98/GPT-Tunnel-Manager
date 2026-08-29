@@ -59,10 +59,25 @@ func surface(bg color.NRGBA, radius unit.Dp, inset layout.Inset, content layout.
 
 func fillSurface(bg color.NRGBA, radius unit.Dp, inset layout.Inset, content layout.Widget) layout.Widget {
 	return func(gtx layout.Context) layout.Dimensions {
-		if gtx.Constraints.Max.X > 0 {
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		if gtx.Constraints.Max.X <= 0 {
+			return surface(bg, radius, inset, content)(gtx)
 		}
-		return surface(bg, radius, inset, content)(gtx)
+
+		// Fill the available width without leaking that forced minimum width into
+		// the inset content. Passing Min.X == Max.X through layout.Inset causes
+		// the child to be laid out wider than the available inner width, which
+		// made editor surfaces overrun the right edge and could push button labels
+		// out of their visible area.
+		width := gtx.Constraints.Max.X
+		return layout.Background{}.Layout(gtx,
+			func(gtx layout.Context) layout.Dimensions { return fillRounded(gtx, bg, radius) },
+			func(gtx layout.Context) layout.Dimensions {
+				gtx.Constraints.Min.X = 0
+				dims := inset.Layout(gtx, content)
+				dims.Size.X = width
+				return dims
+			},
+		)
 	}
 }
 
