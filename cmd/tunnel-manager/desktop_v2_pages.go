@@ -124,7 +124,7 @@ func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 						})
 					}),
 				)
-			})(gtx))
+			}))
 		})
 	}
 
