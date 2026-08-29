@@ -24,8 +24,8 @@ type executorDefinition struct {
 }
 
 var executorDefinitions = []executorDefinition{
-	{toolcontract.ExecutorReadOnlyClosed, "Call read-only closed-world tool", "Execute a read-only downstream tool that does not interact with the open world.", true, false, true, false},
-	{toolcontract.ExecutorReadOnlyOpen, "Call read-only open-world tool", "Execute a read-only downstream tool that may interact with the open world.", true, false, true, true},
+	{toolcontract.ExecutorReadOnlyClosed, "Call read-only closed-world tool", "Execute a read-only downstream tool that does not interact with the open world.", true, false, false, false},
+	{toolcontract.ExecutorReadOnlyOpen, "Call read-only open-world tool", "Execute a read-only downstream tool that may interact with the open world.", true, false, false, true},
 	{toolcontract.ExecutorAdditiveClosed, "Call additive closed-world tool", "Execute a non-destructive, non-idempotent downstream tool that does not interact with the open world.", false, false, false, false},
 	{toolcontract.ExecutorAdditiveClosedIdempotent, "Call idempotent additive closed-world tool", "Execute a non-destructive, idempotent downstream tool that does not interact with the open world.", false, false, true, false},
 	{toolcontract.ExecutorAdditiveOpen, "Call additive open-world tool", "Execute a non-destructive, non-idempotent downstream tool that may interact with the open world.", false, false, false, true},
@@ -55,8 +55,12 @@ func NewRouterServer(discoveryService *discovery.Service, executionService *exec
 func registerV2ExecutionTools(server *mcp.Server, service *executionrouter.Service) {
 	for _, definition := range executorDefinitions {
 		definition := definition
-		destructive := definition.Destructive
 		openWorld := definition.OpenWorld
+		var destructiveHint *bool
+		if !definition.ReadOnly {
+			destructive := definition.Destructive
+			destructiveHint = &destructive
+		}
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        string(definition.Class),
 			Title:       definition.Title,
@@ -64,7 +68,7 @@ func registerV2ExecutionTools(server *mcp.Server, service *executionrouter.Servi
 			Annotations: &mcp.ToolAnnotations{
 				Title:           definition.Title,
 				ReadOnlyHint:    definition.ReadOnly,
-				DestructiveHint: &destructive,
+				DestructiveHint: destructiveHint,
 				IdempotentHint:  definition.Idempotent,
 				OpenWorldHint:   &openWorld,
 			},
