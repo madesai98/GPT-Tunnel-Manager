@@ -6,37 +6,8 @@ import (
 	"time"
 )
 
-type DesiredState string
-
-const (
-	DesiredStopped DesiredState = "stopped"
-	DesiredRunning DesiredState = "running"
-)
-
-type ObservedState string
-
-const (
-	Stopped   ObservedState = "stopped"
-	Starting  ObservedState = "starting"
-	Ready     ObservedState = "ready"
-	Degraded  ObservedState = "degraded"
-	RetryWait ObservedState = "retry_wait"
-	Stopping  ObservedState = "stopping"
-)
-
-type Phase string
-
-const (
-	PhaseNone        Phase = ""
-	PhasePreflight   Phase = "preflight"
-	PhaseOwnedServer Phase = "starting_owned_server"
-	PhaseTunnel      Phase = "starting_tunnel"
-	PhaseProbing     Phase = "probing"
-	PhaseReady       Phase = "ready"
-	PhaseStopping    Phase = "stopping"
-	PhaseRetry       Phase = "retry_wait"
-)
-
+// Backoff provides bounded jittered retries for Manager-owned long-lived
+// product services such as the optional Manager Secure MCP Tunnel.
 type Backoff struct {
 	mu sync.Mutex
 	n  int
@@ -58,11 +29,6 @@ func (b *Backoff) Next() time.Duration {
 		b.n++
 	}
 	base := seq[i]
-
-	// Keep jitter, but never allow an Always On/Managed failure to retry at
-	// effectively zero delay. Third-party MCP processes can fail immediately;
-	// a bounded floor prevents rapid process-spawn storms from destabilizing the
-	// Manager while still spreading retries between instances.
 	floor := base / 2
 	return floor + time.Duration(b.r.Int63n(int64(base-floor)+1))
 }
