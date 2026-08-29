@@ -126,7 +126,8 @@ func TestExecuteValidHandleDispatchesExactlyOnce(t *testing.T) {
 	if f.session.calls != 1 {
 		t.Fatalf("downstream calls = %d, want 1", f.session.calls)
 	}
-	if f.session.last.Name != f.tool.Name || f.session.last.Arguments["text"] != "hello" {
+	arguments, ok := f.session.last.Arguments.(map[string]any)
+	if f.session.last.Name != f.tool.Name || !ok || arguments["text"] != "hello" {
 		t.Fatalf("downstream params = %#v", f.session.last)
 	}
 }
