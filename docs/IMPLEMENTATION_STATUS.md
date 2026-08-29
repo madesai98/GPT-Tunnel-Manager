@@ -10,7 +10,7 @@ Date: 2026-08-29
 
 Branch: `feature/v2-mcp-router`
 
-Status: **implementation in progress; Phases 1–7 complete, Phase 8 next**.
+Status: **implementation in progress; Phases 1–8 complete, Phase 9 next**.
 
 The canonical v2 implementation contract is `docs/V2_IMPLEMENTATION_PLAN.md`. `CONTEXT.md` and ADRs 0009 onward describe the accepted v2 architecture and supersede conflicting v1 topology assumptions where stated.
 
@@ -228,7 +228,27 @@ Phase 7 exit gate is satisfied: every canonical Section 18 quality/safety thresh
 
 ### Phase 8 — execution routing and permission-preserving dispatch
 
-Next. Implement the canonical execution router and ten permission-class dispatch paths on top of the Phase 7 discovery/detail and authenticated Execution Handle primitives. Do not begin later Managed lifecycle/use-lease or upstream protocol-surface phases until the Phase 8 exit gate passes.
+Complete through commit `499d2b3e6c487f527262bbbfa95f4f98a2179742` (primary router implementation `63bef3c7731e689f59e684da5e0b1f39f4438260`, executor registration `35fa615e917cf61a0fb1c88cd2ce841e325564c9`).
+
+`internal/executionrouter` and the staged Phase 8 Manager registration now provide:
+
+- one shared execution-router core for all ten permission classes, with explicit catalog/current-generation, routing-state, execution-handle, downstream-session, live-contract invalidation, and result-limit dependencies rather than ten independent dispatch implementations;
+- fail-closed Execution Handle validation covering HMAC/process binding, active current generation, generation ID, Server ID/tool identity, authoritative source fingerprint, normalized executor class, and exact Manager executor endpoint binding before dispatch;
+- caller-supplied human-readable tool identity retained only as display/logging metadata, with routing authority derived exclusively from the authenticated handle plus current authoritative catalog state;
+- safe Manager-side argument validation using the authoritative downstream input schema with only in-document/local `#` and `$defs` resolution; no HTTP, filesystem, or other external `$ref` loader is provided or invoked;
+- full authoritative server `tools/list` fingerprint comparison at execution time, including the case where a newly established downstream session already reflects drift, with mismatch marking the `server:<id>` routing partition dirty, advancing routing revision, returning `index_required`, and preventing dispatch;
+- preservation of existing Phase 3 notification-aware/pre-call contract revalidation, translating a discovered live contract change into the same fail-closed routing invalidation path;
+- an exactly-once downstream `CallTool` boundary with explicit `not_started`, `completed`, and `outcome_unknown` semantics; ambiguous post-dispatch transport failures are non-retryable and never automatically replayed, including for idempotent executor classes;
+- direct pass-through of the official MCP `CallToolResult` object for successful completed calls so text, image, audio, structured content, resource links, embedded resources, and downstream `isError` survive without lossy reconstruction;
+- configured result-size enforcement where an oversized completed result returns `result_too_large` with `outcome=completed` and `retryable=false`, plus post-call invalid-result handling that preserves the original result/isError context internally where possible;
+- all ten staged Manager executor registrations with their exact permission-class annotations; read-only classes leave destructive/idempotent-only hints neutral, and every registration normalizes back to its own authoritative executor class;
+- a Phase 7+8 staged router server exposing discovery/detail plus the ten executors without pulling Phase 9 lifecycle work forward; the canonical fixed 19-tool upstream surface remains Phase 10 work as specified by the implementation plan.
+
+Focused Phase 8 tests cover all ten registration/class mappings, valid-handle dispatch, HMAC tampering, process restart invalidation, stale generations, source-fingerprint mismatch, executor-class mismatch, wrong executor endpoint, no-current-generation fail-closed behavior, ordinary/nested/array schema validation, local `$defs` references, malformed schema rejection, HTTP/file external `$ref` rejection, no downstream call after validation failure, initial-session and pre-call live contract drift, dirty-partition/routing-revision advancement, pure downstream availability semantics, ambiguous idempotent-call no-replay behavior, mixed/structured result fidelity, completed result-size overflow, invalid post-call result handling, and an actual direct External HTTP MCP round-trip through the Phase 3 downstream client layer.
+
+Phase 8 implementation CI run `33266084319` completed successfully: `go mod tidy`/module-graph verification produced zero diff, `go test ./...` passed, the dedicated Phase 7 quality gate remained green, `go vet ./...` passed, the retrieval-scale benchmark step passed, native Linux/Windows/macOS GUI builds passed, Windows process/DPAPI checks passed, and all six headless `CGO_ENABLED=0` cross-build targets passed.
+
+Phase 8 exit gate is satisfied: the safety/executor registration matrix is complete and normalizes correctly, authenticated authority and schema/live-contract failures stop before unsafe dispatch, ambiguous calls are never replayed automatically, and representative mixed MCP results round-trip through the direct downstream path without result loss. Phase 9 — Router-native lifecycle — is next; Phase 9 work has not been started as part of Phase 8.
 
 ## Clean v2 break
 
