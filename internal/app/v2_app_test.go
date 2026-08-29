@@ -46,7 +46,7 @@ func TestV2AppFreshNativeFacade(t *testing.T) {
 	}
 
 	entry := v2config.ServerEntry{
-		ID: "native-test", Name: "Native Test", Mode: v2config.ModeDisabled,
+		ID: "srv_00000000000000000000000000000001", Name: "Native Test", Mode: v2config.ModeDisabled,
 		Transport: v2config.TransportConfig{Type: v2config.TransportStdio, Stdio: &v2config.StdioTransport{Executable: "native-test"}},
 	}
 	if err := application.SaveServer(t.Context(), entry); err != nil {
