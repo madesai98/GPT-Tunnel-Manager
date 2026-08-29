@@ -55,7 +55,7 @@ func (s *callbackState) get() LegacyCallbackTarget {
 	return target
 }
 
-func installCallbackBridge(client *mcp.Client, opts *mcp.ClientOptions, state *callbackState) {
+func prepareCallbackBridge(opts *mcp.ClientOptions, state *callbackState) {
 	previousElicit := opts.ElicitationHandler
 	opts.ElicitationHandler = func(ctx context.Context, req *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
 		if target := state.get(); target != nil {
@@ -76,6 +76,13 @@ func installCallbackBridge(client *mcp.Client, opts *mcp.ClientOptions, state *c
 		}
 		return nil, ErrLegacyCallbackUnsupported
 	}
+	// Keep modern downstream input-required results intact. The Manager's
+	// upstream server MRTR middleware associates them with the originating
+	// routed call instead of auto-answering them inside this client.
+	opts.MultiRoundTrip = &mcp.MultiRoundTripOptions{Disabled: true}
+}
+
+func installRootCallbackBridge(client *mcp.Client, state *callbackState) {
 	client.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			if method == "roots/list" {
