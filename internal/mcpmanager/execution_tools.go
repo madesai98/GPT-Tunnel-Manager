@@ -4,15 +4,11 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/madesai98/GPT-Tunnel-Manager/internal/buildinfo"
-	"github.com/madesai98/GPT-Tunnel-Manager/internal/discovery"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/downstream"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/executionrouter"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
-
-const routerInstructions = "Discover indexed downstream tools, inspect authoritative contracts, then execute only through the permission-class tool authorized by the returned execution handle."
 
 type executorDefinition struct {
 	Class       toolcontract.ExecutorClass
@@ -35,21 +31,6 @@ var executorDefinitions = []executorDefinition{
 	{toolcontract.ExecutorDestructiveClosedIdempotent, "Call idempotent destructive closed-world tool", "Execute a destructive, idempotent downstream tool that does not interact with the open world.", false, true, true, false},
 	{toolcontract.ExecutorDestructiveOpen, "Call destructive open-world tool", "Execute a destructive, non-idempotent downstream tool that may interact with the open world.", false, true, false, true},
 	{toolcontract.ExecutorDestructiveOpenIdempotent, "Call idempotent destructive open-world tool", "Execute a destructive, idempotent downstream tool that may interact with the open world.", false, true, true, true},
-}
-
-// NewRouterServer composes the Phase 7 discovery/detail tools with the Phase 8
-// permission-preserving execution tools. Phase 10's canonical server composes
-// these same registration helpers with the lifecycle-aware continuation path.
-func NewRouterServer(discoveryService *discovery.Service, executionService *executionrouter.Service) *Server {
-	s := &Server{}
-	s.accepting.Store(true)
-	s.mcp = mcp.NewServer(
-		&mcp.Implementation{Name: "gpt-tunnel-manager", Version: buildinfo.Version},
-		&mcp.ServerOptions{Instructions: routerInstructions, Capabilities: &mcp.ServerCapabilities{}},
-	)
-	registerV2DiscoveryTools(s.mcp, discoveryService)
-	registerV2ExecutionTools(s.mcp, executionService)
-	return s
 }
 
 func registerV2ExecutionTools(server *mcp.Server, service *executionrouter.Service) {
