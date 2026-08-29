@@ -10,7 +10,7 @@ Date: 2026-08-28
 
 Branch: `feature/v2-mcp-router`
 
-Status: **implementation in progress; Phases 1–4 complete, Phase 5 next**.
+Status: **implementation in progress; Phases 1–5 complete, Phase 6 next**.
 
 The canonical v2 implementation contract is `docs/V2_IMPLEMENTATION_PLAN.md`. `CONTEXT.md` and ADRs 0009 onward describe the accepted v2 architecture and supersede conflicting v1 topology assumptions where stated.
 
@@ -132,7 +132,38 @@ Phase 4 exit gate is satisfied: the authoritative catalog rebuild foundation is 
 
 ### Phase 5 — embedding and deterministic retrieval substrate
 
-Next. Implement the embedding provider abstraction/OpenAI-compatible provider, batching/dimension/model identity handling, persistent catalog embeddings, memory-only query embedding LRU, lexical/FTS records and retrieval, exact cosine search, correctness tests, and the accepted 1k/5k/10k benchmark measurements. Do not begin agent-driven semantic enrichment until the deterministic retrieval substrate exit gate passes.
+Complete at implementation commit `2a4ad0cef2e5a94ecd2e5253c894d66a9f088759`.
+
+`internal/embedding`, `internal/retrieval`, and the Phase 4 catalog integration now provide:
+
+- a provider-neutral embedding interface with stable provider/model/base-URL/dimension/protocol identity and fingerprinting;
+- an OpenAI-compatible `/embeddings` provider using the dedicated embedding secret reference, bounded batching, optional configured dimensions, response-order reconstruction, vector validation, context cancellation, response-size limits, and error handling that does not expose credential values or provider response bodies;
+- a bounded concurrency-safe memory-only query embedding LRU keyed by exact query digest plus provider identity, with configured capacity from `manager.Index.QueryEmbeddingCacheEntries` and no query text/vector persistence;
+- deterministic authoritative tool projections for source name/title/description text, canonical input-schema JSON, and the lexical source channel, each carrying an explicit projection version/fingerprint and never dereferencing remote schema references;
+- persistent content-addressed embedding artifacts whose dependency identity includes exact projected input, embedding provider/model/config identity, and projection version, allowing safe cross-generation reuse while preventing reuse across model/config changes;
+- explicit generation artifact requirements layered onto the existing fail-closed generation dependency/attachment model so a staging generation cannot promote when a required embedding or lexical artifact remains unfulfilled;
+- generation-bound lexical records plus a portable pure-Go deterministic BM25 substrate, avoiding a required SQLite FTS/native-extension dependency and preserving the existing `CGO_ENABLED=0` release path;
+- exact cosine retrieval with finite/nonzero/dimension validation, pre-normalized catalog vectors, deterministic key tie-breaking, and no ANN dependency;
+- deterministic binary vector artifact encoding with dimension and payload validation on load;
+- independent vector roles for source-description and input-schema channels so later Phase 7 retrieval can fuse separate ranking signals without Phase 5 hardcoding final search ranking.
+
+Focused Phase 5 tests cover provider batching/dimensions/response ordering, malformed embedding responses, credential/error-body non-leakage, cancellation, query-cache hits/eviction/provider separation/concurrency/restart loss, vector invalid-input handling and stable ties, lexical BM25 correctness and stable ties, canonical source/schema projections and remote `$ref` non-dereferencing, content-addressed provider-bound embedding reuse, generation promotion blocking on missing required retrieval artifacts, and catalog-backed vector/lexical index loading.
+
+Phase 5 implementation CI run `33234111003` completed successfully: `go mod tidy` produced zero diff, `go test ./...` and `go vet ./...` passed, native Linux/Windows/macOS GUI builds passed, and all six headless `CGO_ENABLED=0` cross-build targets passed.
+
+The same GitHub Actions test job recorded the required deterministic scale benchmarks on Ubuntu 24.04 / linux-amd64, Go 1.25.14, Intel Xeon 6973P-C, using 256-dimensional exact-cosine vectors:
+
+| Tools | Exact cosine | Exact allocs | Lexical BM25 | Lexical allocs |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 270,510 ns/op | 25,702 B/op, 5 allocs/op | 164,569 ns/op | 24,872 B/op, 12 allocs/op |
+| 5,000 | 1,640,202 ns/op | 124,000 B/op, 5 allocs/op | 818,656 ns/op | 123,176 B/op, 12 allocs/op |
+| 10,000 | 3,404,594 ns/op | 246,881 B/op, 5 allocs/op | 1,584,787 ns/op | 246,056 B/op, 12 allocs/op |
+
+Phase 5 exit gate is satisfied: deterministic vector/lexical retrieval correctness tests pass, persistent derived artifacts participate in fail-closed generation readiness, user query embeddings remain memory-only, the pure-Go portability contract is preserved, and measured 1k/5k/10k performance supports keeping exact search for the initial catalog scale rather than introducing ANN prematurely.
+
+### Phase 6 — semantic enrichment, neighborhood invalidation, and routing preference data
+
+Next. Implement the bounded agent-driven enrichment workflow, semantic-neighbor construction and neighborhood-change invalidation, capability reconciliation, Ambiguity Reviews, and Routing Profiles/Preferences persistence/semantics using the Phase 5 deterministic retrieval substrate. Keep preferences independent of the Index Generation/Routing State Hash and do not pull Phase 7 final search fusion or Execution Handle APIs forward.
 
 ## Clean v2 break
 
