@@ -10,7 +10,7 @@ Date: 2026-08-29
 
 Branch: `feature/v2-mcp-router`
 
-Status: **implementation in progress; Phases 1–11 complete, Phase 12 next**.
+Status: **implementation in progress; Phases 1–12 complete, Phase 13 next**.
 
 The canonical v2 implementation contract is `docs/V2_IMPLEMENTATION_PLAN.md`. `CONTEXT.md` and ADRs 0009 onward describe the accepted v2 architecture and supersede conflicting v1 topology assumptions where stated.
 
@@ -320,7 +320,32 @@ The executable bootstrap, `internal/app.V2App` facade, native Gio desktop module
 
 Phase 11 first exit-gate CI run `33276157337` completed successfully on `a15f84a0cf63f6ca38e50a4d581d1b2ea2a9c44c`: committed module-graph verification produced zero diff, `go test ./...` passed including the Phase 11 facade coverage, the dedicated Phase 7 discovery quality gate remained green, `go vet ./...` passed, the retrieval-scale benchmark step passed, native Linux/Windows/macOS GUI builds passed, Windows process/DPAPI checks passed, and all six headless `CGO_ENABLED=0` cross-build targets passed.
 
-Phase 11 exit-gate implementation requirements are satisfied: a fresh v2 user can manage the v2 Manager configuration, downstream Server Entries/authentication, embedding/index workflows, Ambiguity Reviews, and Routing Profiles/Preferences through native UI without manually editing JSON or secret references; the desktop/headless executable paths start the v2 bootstrap directly; and native tray/logging/update behavior remains available without reintroducing per-server tunnel/plugin/marker topology. Phase 12 remains the owner of deleting/retiring the old v1 topology packages and unreachable legacy desktop implementation.
+The Phase 11 status-documentation head `b0171f471f912dbbcd028813b422e904bb3ccf0f` was then verified by a second fully green CI run `33276700912` before Phase 12 work began.
+
+Phase 11 exit-gate implementation requirements are satisfied: a fresh v2 user can manage the v2 Manager configuration, downstream Server Entries/authentication, embedding/index workflows, Ambiguity Reviews, and Routing Profiles/Preferences through native UI without manually editing JSON or secret references; the desktop/headless executable paths start the v2 bootstrap directly; and native tray/logging/update behavior remains available without reintroducing per-server tunnel/plugin/marker topology.
+
+### Phase 12 — remove old topology
+
+Complete through implementation commit `adbfde16f84c6ee29b2d6abc29df0f3aa4e5e6f3` (primary topology-removal commit `b855a47060144d4033828828648521aaf6b324d5`).
+
+The active v2 tree now removes the superseded topology rather than merely leaving it unreachable:
+
+- deleted `assets/lifecycle-skill/`, `internal/lifecycleskill/`, and `internal/marker/` completely;
+- deleted the legacy `internal/servers` registry/runtime/supervisor/crash-guard implementation and its tests, eliminating the old per-server tunnel/lifecycle ownership path;
+- deleted the old v1 `internal/app.App` facade/public surface and the obsolete `internal/events` bus that existed for that runtime;
+- deleted the complete legacy `internal/config` package after detaching logging from its schema; v2 configuration remains exclusively under `internal/v2config` plus the v2 state coordinator;
+- deleted the old four-tool lifecycle `internal/mcpmanager/server.go` implementation while retaining the canonical Phase 10 `V2Server`; the shared structured tool-error envelope now lives in a v2-neutral file;
+- removed obsolete staged `NewDiscoveryServer` / `NewRouterServer` constructors that depended on the deleted legacy Manager server, while keeping the reusable v2 discovery/execution registration functions used by the canonical 19-tool Manager;
+- deleted the unreachable v1 desktop server/settings/logging/manager-control/self-update modules after Phase 11 moved all executable startup and native UX to the v2 surface; only neutral shared styling/tray helpers and `desktop_v2_*` modules remain active;
+- retained `internal/tunnelclient` only for the optional Manager Secure MCP Tunnel installer/update/runtime path, narrowed its runtime contract to one Manager MCP URL plus Manager tunnel ID/credential/health/logging, and removed Stdio-command targeting, downstream activity telemetry, `MCPCommand`, `Activity()`, and the Stdio handshake test;
+- retained `internal/lifecycle` only as a generic bounded jittered `Backoff` used by the optional Manager tunnel, removing the superseded Desired/Observed/Phase server/tunnel state enums;
+- preserved direct Stdio/Managed HTTP/External HTTP downstream clients, router-native Managed Use Leases, Manager-owned activity timestamps, live tool-contract invalidation, and the canonical 19-tool Manager surface with no dependency on the removed topology.
+
+A recursive feature-branch tree audit after the removal found no active `internal/servers`, `internal/lifecycleskill`, `internal/marker`, or `internal/config` paths. The Phase 11-to-Phase 12 compare shows the removals are confined to the superseded v1 topology and unreachable desktop implementation, while the only retained tunnel-client runtime is the Manager-URL path described above. Historical ADRs remain as architecture history and are not active runtime dependencies.
+
+Phase 12 implementation CI run `33277299441` completed successfully on `adbfde16f84c6ee29b2d6abc29df0f3aa4e5e6f3`: committed module-graph verification produced zero diff, `go test ./...` passed, the dedicated Phase 7 discovery quality gate remained green, `go vet ./...` passed, the retrieval-scale benchmark step passed, native Linux/Windows/macOS GUI builds passed, Windows process/DPAPI checks passed, and all six headless `CGO_ENABLED=0` cross-build targets passed.
+
+Phase 12 exit gate is satisfied: active downstream routing/lifecycle code has no dependency on per-server Secure Tunnels, lifecycle markers, lifecycle skills, the old registry/runtime topology, or v1 configuration; `internal/tunnelclient` remains solely for the one optional Manager Secure MCP Tunnel. Phase 13 — full verification and release hardening — is next.
 
 ## Clean v2 break
 
