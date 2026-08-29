@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"gioui.org/layout"
@@ -76,8 +75,12 @@ func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 			running := snapshots[entry.ID]
 			state := "STOPPED"
 			bg, fg := uiSurfaceRaised, uiMuted
-			if running { state, bg, fg = "RUNNING", uiSuccessSoft, uiSuccess }
-			if entry.Mode == v2config.ModeDisabled { state, bg, fg = "DISABLED", uiWarningSoft, uiWarning }
+			if running {
+				state, bg, fg = "RUNNING", uiSuccessSoft, uiSuccess
+			}
+			if entry.Mode == v2config.ModeDisabled {
+				state, bg, fg = "DISABLED", uiWarningSoft, uiWarning
+			}
 			oauth := u.core.OAuthStatus(context.Background(), entry.ID)
 			return layout.Inset{Bottom: unit.Dp(10)}.Layout(gtx, card(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -103,7 +106,9 @@ func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 							}
 							if oauth.Configured {
 								label := "Connect OAuth"
-								if oauth.Connected { label = "Reconnect OAuth" }
+								if oauth.Connected {
+									label = "Reconnect OAuth"
+								}
 								children = append(children,
 									layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
 									layout.Rigid(secondaryButton(u.th, &actions.oauth, label)),
@@ -131,60 +136,9 @@ func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 }
 
 func v2IndexPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
-	for u.indexRefresh.Clicked(gtx) {
-		u.async("refreshing index", func() error { _, err := u.core.IndexRefresh(context.Background()); return err })
-	}
-	for u.indexCommit.Clicked(gtx) {
-		u.async("committing index", func() error { _, err := u.core.IndexCommit(context.Background()); return err })
-	}
-	status, err := u.core.IndexStatus(context.Background())
-	if err != nil {
-		return card(func(gtx layout.Context) layout.Dimensions { return mutedCaption(u.th, err.Error())(gtx) })(gtx)
-	}
-	return card(func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(sectionTitle(u.th, "Routing catalog")),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, mutedCaption(u.th, fmt.Sprintf("Active: %s", status.ActiveGenerationID))) }),
-			layout.Rigid(mutedCaption(u.th, fmt.Sprintf("Staging: %s", status.StagingGenerationID))),
-			layout.Rigid(mutedCaption(u.th, fmt.Sprintf("Ready: %t · pending required: %d · open reviews: %d", status.Ready, status.PendingRequired, status.OpenReviews))),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{}.Layout(gtx,
-						layout.Rigid(primaryButton(u.th, &u.indexRefresh, "Refresh Index")),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(8)}.Layout(gtx) }),
-						layout.Rigid(secondaryButton(u.th, &u.indexCommit, "Commit Ready Index")),
-					)
-				})
-			}),
-		)
-	})(gtx)
+	return v2IndexReviewPage(u, gtx)
 }
 
 func v2RoutingPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
-	prefs, err := u.core.RoutingPreferences(context.Background())
-	if err != nil {
-		return card(func(gtx layout.Context) layout.Dimensions { return mutedCaption(u.th, err.Error())(gtx) })(gtx)
-	}
-	sort.Slice(prefs.Profiles, func(i, j int) bool { return prefs.Profiles[i].ID < prefs.Profiles[j].ID })
-	return card(func(gtx layout.Context) layout.Dimensions {
-		children := []layout.FlexChild{
-			layout.Rigid(sectionTitle(u.th, fmt.Sprintf("Preference revision %d", prefs.PreferenceRevision))),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(8), Bottom: unit.Dp(8)}.Layout(gtx, mutedCaption(u.th, fmt.Sprintf("%d profiles · %d rules", len(prefs.Profiles), len(prefs.Rules))))
-			}),
-		}
-		for _, profile := range prefs.Profiles {
-			p := profile
-			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return mutedCaption(u.th, fmt.Sprintf("Profile %s — %s", p.ID, p.Name))(gtx)
-			}))
-		}
-		for _, rule := range prefs.Rules {
-			r := rule
-			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return mutedCaption(u.th, fmt.Sprintf("%s · %s · %s", r.ID, r.Spec.Specificity, r.ReviewState))(gtx)
-			}))
-		}
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
-	})(gtx)
+	return v2RoutingEditorPage(u, gtx)
 }
