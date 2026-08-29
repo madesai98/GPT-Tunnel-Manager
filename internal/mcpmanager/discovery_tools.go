@@ -2,10 +2,14 @@ package mcpmanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/buildinfo"
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/catalog"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/discovery"
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -19,9 +23,24 @@ type searchToolsOutput struct {
 	Error              *toolError                  `json:"error,omitempty"`
 }
 
+// authoritativeToolOutput is the MCP-facing projection of the authoritative
+// catalog record. discovery.AuthoritativeTool intentionally keeps the original
+// downstream Tool contract as json.RawMessage so catalog/discovery code can
+// preserve the exact source JSON. Reflecting RawMessage through the typed MCP
+// output-schema generator describes it as []byte, though the wire value is a
+// JSON object. Decode only at the upstream boundary so the advertised schema
+// and actual JSON value agree without weakening authoritative storage fidelity.
+type authoritativeToolOutput struct {
+	Server             catalog.SourceServerContract `json:"server"`
+	InvocationIdentity discovery.InvocationIdentity  `json:"invocation_identity"`
+	SourceFingerprint  string                        `json:"source_fingerprint"`
+	ExecutorClass      toolcontract.ExecutorClass    `json:"executor_class"`
+	Tool               any                           `json:"tool" jsonschema:"Exact authoritative downstream MCP Tool contract as a JSON value."`
+}
+
 type getToolOutput struct {
 	GenerationID    string                       `json:"generation_id,omitempty"`
-	Authoritative   *discovery.AuthoritativeTool `json:"authoritative,omitempty"`
+	Authoritative   *authoritativeToolOutput     `json:"authoritative,omitempty"`
 	Derived         *discovery.DerivedTool       `json:"derived,omitempty"`
 	HumanIdentity   *discovery.HumanToolIdentity `json:"human_identity,omitempty"`
 	ExecutionHandle string                       `json:"execution_handle,omitempty"`
@@ -92,12 +111,39 @@ func registerV2DiscoveryTools(server *mcp.Server, service *discovery.Service) {
 		if err != nil {
 			return discoveryGetFailure(err)
 		}
+		authoritative, err := projectAuthoritativeTool(result.Authoritative)
+		if err != nil {
+			return discoveryGetFailure(err)
+		}
 		return nil, getToolOutput{
-			GenerationID: result.GenerationID, Authoritative: &result.Authoritative,
+			GenerationID: result.GenerationID, Authoritative: &authoritative,
 			Derived: &result.Derived, HumanIdentity: &result.HumanIdentity, ExecutionHandle: result.ExecutionHandle,
 		}, nil
 	})
 }
+
+func projectAuthoritativeTool(source discovery.AuthoritativeTool) (authoritativeToolOutput, error) {
+	if len(source.Tool) == 0 {
+		return authoritativeToolOutput{}, errors.New("authoritative downstream tool contract is empty")
+	}
+	var tool any
+	decoder := json.NewDecoder(stringsNewReaderBytes(source.Tool))
+	decoder.UseNumber()
+	if err := decoder.Decode(&tool); err != nil {
+		return authoritativeToolOutput{}, fmt.Errorf("decode authoritative downstream tool contract: %w", err)
+	}
+	return authoritativeToolOutput{
+		Server:             source.Server,
+		InvocationIdentity: source.InvocationIdentity,
+		SourceFingerprint:  source.SourceFingerprint,
+		ExecutorClass:      source.ExecutorClass,
+		Tool:               tool,
+	}, nil
+}
+
+// stringsNewReaderBytes keeps the JSON projection allocation local without
+// converting the authoritative source bytes through any alternate serializer.
+func stringsNewReaderBytes(body []byte) *bytes.Reader { return bytes.NewReader(body) }
 
 func discoverySearchFailure(err error) (*mcp.CallToolResult, searchToolsOutput, error) {
 	return &mcp.CallToolResult{IsError: true}, searchToolsOutput{Error: stableDiscoveryError(err)}, nil
