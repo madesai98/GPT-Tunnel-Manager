@@ -7,7 +7,7 @@ import (
 	"fmt"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 var (
 	ErrCatalogCorrupt            = errors.New("catalog is corrupt")
@@ -43,6 +43,15 @@ CREATE UNIQUE INDEX generations_one_active
 ON generations(status) WHERE status = 'active';
 CREATE INDEX generations_status_created
 ON generations(status, created_at_unix_ms DESC);
+
+CREATE TABLE source_servers (
+    generation_id TEXT NOT NULL,
+    server_id TEXT NOT NULL,
+    source_fingerprint TEXT NOT NULL,
+    contract_json BLOB NOT NULL,
+    PRIMARY KEY (generation_id, server_id),
+    FOREIGN KEY (generation_id) REFERENCES generations(generation_id) ON DELETE CASCADE
+);
 
 CREATE TABLE generation_members (
     generation_id TEXT NOT NULL,
@@ -169,9 +178,21 @@ CREATE TABLE continuation_mappings (
 );
 `
 
+const migrationV2SQL = `
+CREATE TABLE source_servers (
+    generation_id TEXT NOT NULL,
+    server_id TEXT NOT NULL,
+    source_fingerprint TEXT NOT NULL,
+    contract_json BLOB NOT NULL,
+    PRIMARY KEY (generation_id, server_id),
+    FOREIGN KEY (generation_id) REFERENCES generations(generation_id) ON DELETE CASCADE
+);
+`
+
 var requiredTables = []string{
 	"routing_state",
 	"generations",
+	"source_servers",
 	"generation_members",
 	"source_tools",
 	"dirty_partitions",
@@ -205,22 +226,16 @@ func ensureSchema(ctx context.Context, db *sql.DB) error {
 		if userTables != 0 {
 			return fmt.Errorf("%w: unversioned catalog contains application tables", ErrCatalogCorrupt)
 		}
-		tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
-		if err != nil {
-			return fmt.Errorf("begin catalog schema transaction: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("initialize catalog schema: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("set catalog schema version: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit catalog schema: %w", err)
+		if err := applySchemaStep(ctx, db, schemaSQL, SchemaVersion, "initialize catalog schema"); err != nil {
+			return err
 		}
 		version = SchemaVersion
+	}
+	if version == 1 {
+		if err := applySchemaStep(ctx, db, migrationV2SQL, 2, "migrate catalog schema to v2"); err != nil {
+			return err
+		}
+		version = 2
 	}
 	if version != SchemaVersion {
 		return fmt.Errorf("%w: unsupported catalog schema version %d", ErrCatalogCorrupt, version)
@@ -235,6 +250,25 @@ func ensureSchema(ctx context.Context, db *sql.DB) error {
 		if count != 1 {
 			return fmt.Errorf("%w: required table %s is missing", ErrCatalogCorrupt, table)
 		}
+	}
+	return nil
+}
+
+func applySchemaStep(ctx context.Context, db *sql.DB, statements string, targetVersion int, label string) error {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return fmt.Errorf("begin %s transaction: %w", label, err)
+	}
+	if _, err := tx.ExecContext(ctx, statements); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("%s: %w", label, err)
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", targetVersion)); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("set catalog schema version %d: %w", targetVersion, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit %s: %w", label, err)
 	}
 	return nil
 }
