@@ -18,6 +18,13 @@ import (
 
 const DefaultMaxResultBytes = 8 << 20
 
+const (
+	CodeManualServerStopped = "manual_server_stopped"
+	CodeServerDisabled      = "server_disabled"
+	CodeServerBusy          = "server_busy"
+	CodeManagerShuttingDown = "manager_shutting_down"
+)
+
 type Outcome string
 
 const (
@@ -86,6 +93,23 @@ type SessionProviderFunc func(context.Context, string) (Session, error)
 
 func (f SessionProviderFunc) Session(ctx context.Context, serverID string) (Session, error) {
 	return f(ctx, serverID)
+}
+
+// sessionLease is intentionally optional so Phase 8 test/fixture providers and
+// any non-lifecycle session providers remain source-compatible. Phase 9's
+// router-native provider returns a leased session; Execute defers Release across
+// every path after acquisition, including contract checks and result handling.
+type sessionLease interface {
+	Release()
+}
+
+// providerExecutionError lets the lifecycle provider surface stable blockers
+// (Manual stopped, Disabled, shutdown, etc.) without coupling the execution
+// router to a concrete lifecycle package.
+type providerExecutionError interface {
+	error
+	ExecutionCode() string
+	ExecutionRetryable() bool
 }
 
 type Options struct {
@@ -194,8 +218,24 @@ func (s *Service) Execute(ctx context.Context, executor toolcontract.ExecutorCla
 	}
 	session, err := s.sessions.Session(ctx, claims.ServerID)
 	if err != nil {
-		return nil, executionFailure(CodeDownstreamUnavailable, fmt.Sprintf("downstream %s unavailable: %v", claims.ServerID, err), OutcomeNotStarted, true, err)
+		code := CodeDownstreamUnavailable
+		retryable := true
+		var classified providerExecutionError
+		if errors.As(err, &classified) {
+			if candidate := strings.TrimSpace(classified.ExecutionCode()); candidate != "" {
+				code = candidate
+			}
+			retryable = classified.ExecutionRetryable()
+		}
+		return nil, executionFailure(code, fmt.Sprintf("downstream %s unavailable: %v", claims.ServerID, err), OutcomeNotStarted, retryable, err)
 	}
+	if session == nil {
+		return nil, executionFailure(CodeManagerUnavailable, "downstream session provider returned a nil session", OutcomeNotStarted, true, nil)
+	}
+	if lease, ok := session.(sessionLease); ok {
+		defer lease.Release()
+	}
+
 	liveSnapshot := session.InitialTools()
 	if liveSnapshot.Fingerprint == "" || liveSnapshot.Fingerprint != expectedSnapshot.Fingerprint {
 		if invalidateErr := s.invalidateContract(ctx, claims.ServerID, liveSnapshot.Fingerprint); invalidateErr != nil {

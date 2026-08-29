@@ -19,6 +19,16 @@ const (
 	oauthIdentitySecretPrefix       = "secret://routing/oauth-identity/"
 )
 
+// ServerMutationCoordinator reserves runtime-affecting Server Entry changes
+// before they are persisted. Phase 9's router-native lifecycle uses this seam
+// to fail edits/disable/delete with server_busy while use leases are active and
+// to prevent a new acquisition from racing between the busy check and commit.
+type ServerMutationCoordinator interface {
+	PrepareServerMutation(current, next v2config.ServersConfig) error
+	CommitServerMutation(next v2config.ServersConfig)
+	AbortServerMutation()
+}
+
 // Coordinator is the Phase 2 config/secret/routing-state consistency boundary.
 // Any routing-affecting mutation marks the live generation gate unready before
 // the durable write and only re-enables it after the deterministic current hash
@@ -32,12 +42,13 @@ type Coordinator struct {
 	secrets secrets.Store
 	tracker *routingstate.Tracker
 
-	manager        v2config.ManagerConfig
-	servers        v2config.ServersConfig
-	fingerprintKey []byte
-	currentHash    string
-	initialized    bool
-	ready          bool
+	manager         v2config.ManagerConfig
+	servers         v2config.ServersConfig
+	fingerprintKey  []byte
+	currentHash     string
+	initialized     bool
+	ready           bool
+	serverMutations ServerMutationCoordinator
 }
 
 func New(configStore *v2config.Store, secretStore secrets.Store, tracker *routingstate.Tracker) (*Coordinator, error) {
@@ -51,6 +62,15 @@ func New(configStore *v2config.Store, secretStore secrets.Store, tracker *routin
 		return nil, errors.New("routing state tracker is required")
 	}
 	return &Coordinator{config: configStore, secrets: secretStore, tracker: tracker}, nil
+}
+
+// SetServerMutationCoordinator installs the runtime mutation guard used by
+// SaveServers. It is intentionally a narrow interface so v2state does not own
+// lifecycle implementation details or introduce a package cycle.
+func (c *Coordinator) SetServerMutationCoordinator(coordinator ServerMutationCoordinator) {
+	c.mu.Lock()
+	c.serverMutations = coordinator
+	c.mu.Unlock()
 }
 
 func (c *Coordinator) Initialize(ctx context.Context) (v2config.ManagerConfig, v2config.ServersConfig, routingstate.Snapshot, error) {
@@ -143,15 +163,37 @@ func (c *Coordinator) SaveServers(ctx context.Context, serversConfig v2config.Se
 	if err := v2config.ValidateServers(serversConfig); err != nil {
 		return routingstate.Snapshot{}, err
 	}
+
+	guard := c.serverMutations
+	prepared := false
+	abortPrepared := func() {
+		if prepared && guard != nil {
+			guard.AbortServerMutation()
+			prepared = false
+		}
+	}
+	if guard != nil {
+		if err := guard.PrepareServerMutation(c.servers, serversConfig); err != nil {
+			return routingstate.Snapshot{}, err
+		}
+		prepared = true
+	}
+
 	candidateHash, err := c.computeHashLocked(ctx, c.manager, serversConfig)
 	if err != nil {
+		abortPrepared()
 		return routingstate.Snapshot{}, err
 	}
 	if candidateHash != c.currentHash {
 		c.ready = false
 	}
 	if err := c.config.SaveServers(serversConfig); err != nil {
+		abortPrepared()
 		return routingstate.Snapshot{}, err
+	}
+	if guard != nil {
+		guard.CommitServerMutation(serversConfig)
+		prepared = false
 	}
 	return c.reconcilePersistedLocked(ctx)
 }
