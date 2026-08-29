@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/madesai98/GPT-Tunnel-Manager/internal/config"
 )
 
 type Level string
@@ -381,27 +379,6 @@ func redactValue(r *Redactor, value any) any {
 	default:
 		return value
 	}
-}
-
-func (l *Logger) Reconfigure(c config.LoggingConfig) error {
-	var next *diskSink
-	var err error
-	if c.WriteToDisk {
-		next, err = newDiskSink(filepath.Join(l.root, "logs", "manager"), parseLevel(c.DiskMinimumLevel), c.MaximumFileSizeMB, c.KeepFiles)
-		if err != nil {
-			return err
-		}
-	}
-	l.mu.Lock()
-	old := l.disk
-	l.disk = next
-	l.capture = effectiveCaptureLevel(c.CaptureLevel, c.MemoryLimitMB, c.DiskMinimumLevel, c.MaximumFileSizeMB, c.KeepFiles)
-	l.ring.SetMaxMB(c.MemoryLimitMB)
-	l.mu.Unlock()
-	if old != nil {
-		return old.close()
-	}
-	return nil
 }
 
 func (l *Logger) Close() error {
