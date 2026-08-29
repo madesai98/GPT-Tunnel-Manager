@@ -25,6 +25,9 @@ func (c *Coordinator) PrepareToolEnrichment(ctx context.Context, generationID st
 		return catalog.EnrichmentBatchCounts{}, err
 	}
 	if batchCount != 0 {
+		if err := c.repairAcceptedBatches(ctx, generationID, catalog.BatchToolEnrichment); err != nil {
+			return catalog.EnrichmentBatchCounts{}, err
+		}
 		return c.catalog.EnrichmentBatchCounts(ctx, generationID)
 	}
 	sources, err := c.catalog.SourceTools(ctx, generationID)
@@ -159,6 +162,9 @@ func (c *Coordinator) PrepareCapabilityReconciliation(ctx context.Context, gener
 		return catalog.EnrichmentBatchCounts{}, err
 	}
 	if count != 0 {
+		if err := c.repairAcceptedBatches(ctx, generationID, catalog.BatchCapabilityReconciliation); err != nil {
+			return catalog.EnrichmentBatchCounts{}, err
+		}
 		return c.catalog.EnrichmentBatchCounts(ctx, generationID)
 	}
 	pendingTool, err := c.catalog.PendingEnrichmentBatches(ctx, generationID, catalog.BatchToolEnrichment, 1)
