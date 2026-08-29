@@ -14,6 +14,8 @@ import (
 	"strings"
 )
 
+const legacyLifecycleBundle = "lifecycle-skill"
+
 func extractReleaseArchive(archivePath, assetName, stageDir, targetExecutableName string) error {
 	rootName := assetName
 	switch {
@@ -153,6 +155,9 @@ func releaseRelativePath(name, rootName, targetExecutableName string) (string, b
 		return "", true, nil
 	}
 	parts := strings.Split(rel, "/")
+	if parts[0] == legacyLifecycleBundle {
+		return "", false, fmt.Errorf("update archive contains obsolete v1 packaged path %s", legacyLifecycleBundle)
+	}
 	if _, protected := protectedTopLevel[parts[0]]; protected {
 		return "", true, nil
 	}

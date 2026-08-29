@@ -71,6 +71,7 @@ $Executable = %s
 $TempRoot = %s
 $RestartArgs = @(%s)
 $Protected = @('config', 'data', 'tools')
+$ObsoletePackaged = @('lifecycle-skill')
 
 $deadline = (Get-Date).AddSeconds(75)
 while (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
@@ -80,6 +81,13 @@ while (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
 if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
     Stop-Process -Id $ProcessId -Force
     Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
+}
+
+$ObsoletePackaged | ForEach-Object {
+    $obsoletePath = Join-Path $Target $_
+    if (Test-Path -LiteralPath $obsoletePath) {
+        Remove-Item -LiteralPath $obsoletePath -Recurse -Force
+    }
 }
 
 Get-ChildItem -LiteralPath $Stage -Force | ForEach-Object {
@@ -145,6 +153,7 @@ if kill -0 "$PID" 2>/dev/null; then
     kill -KILL "$PID" 2>/dev/null || true
 fi
 
+rm -rf "$TARGET/lifecycle-skill"
 for ITEM in "$STAGE"/* "$STAGE"/.[!.]* "$STAGE"/..?*; do
     [ -e "$ITEM" ] || continue
     NAME=$(basename "$ITEM")

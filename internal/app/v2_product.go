@@ -159,14 +159,26 @@ func (p *v2ProductRuntime) restartManagerTunnel(a *V2App) {
 	}
 	p.log.Redactor().Register(credential)
 
+	localAuthorization := ""
+	if cfg.LocalManager.AccessProtectionEnabled {
+		capability, err := a.secrets.Get(ctx, v2config.LocalManagerCapabilitySecretRef)
+		if err != nil {
+			p.managerTunnelStartFailed(a, generation, fmt.Errorf("load local Manager capability for secure tunnel: %w", err))
+			return
+		}
+		p.log.Redactor().Register(capability)
+		localAuthorization = "Bearer " + string(capability)
+	}
+
 	runtime, err := tunnelclient.Start(ctx, tunnelclient.RunSpec{
-		Binary:          active.Path,
-		TunnelID:        cfg.ManagerTunnel.TunnelID,
-		APIKey:          string(credential),
-		MCPURL:          a.ManagerSnapshot().MCPURL,
-		HealthDir:       filepath.Join(p.root, "data", "tunnel-client", "state", "manager"),
-		StartupTimeout:  30 * time.Second,
-		ShutdownTimeout: 10 * time.Second,
+		Binary:           active.Path,
+		TunnelID:         cfg.ManagerTunnel.TunnelID,
+		APIKey:           string(credential),
+		MCPURL:           a.ManagerSnapshot().MCPURL,
+		MCPAuthorization: localAuthorization,
+		HealthDir:        filepath.Join(p.root, "data", "tunnel-client", "state", "manager"),
+		StartupTimeout:   30 * time.Second,
+		ShutdownTimeout:  10 * time.Second,
 		OnLog: func(stream, line string) {
 			p.log.Log(logging.Info, "Manager", "Tunnel Client", line, map[string]any{"stream": stream})
 		},
@@ -312,6 +324,8 @@ func (p *v2ProductRuntime) managerChanged(a *V2App, old, next v2config.ManagerCo
 	}
 	p.log.Log(logging.Info, "Manager", "Configuration", "manager settings saved", nil)
 	if old.ManagerTunnel != next.ManagerTunnel ||
+		old.LocalManager.Port != next.LocalManager.Port ||
+		old.LocalManager.AccessProtectionEnabled != next.LocalManager.AccessProtectionEnabled ||
 		old.TunnelClient.BinaryPath != next.TunnelClient.BinaryPath ||
 		old.TunnelClient.Channel != next.TunnelClient.Channel {
 		go p.restartManagerTunnel(a)

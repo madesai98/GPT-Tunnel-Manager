@@ -16,15 +16,18 @@ import (
 	proc "github.com/madesai98/GPT-Tunnel-Manager/internal/process"
 )
 
+const managerMCPAuthorizationEnv = "GTM_MANAGER_MCP_AUTHORIZATION"
+
 type RunSpec struct {
-	Binary          string
-	TunnelID        string
-	APIKey          string
-	MCPURL          string
-	HealthDir       string
-	StartupTimeout  time.Duration
-	ShutdownTimeout time.Duration
-	OnLog           func(stream, line string)
+	Binary           string
+	TunnelID         string
+	APIKey           string
+	MCPURL           string
+	MCPAuthorization string
+	HealthDir        string
+	StartupTimeout   time.Duration
+	ShutdownTimeout  time.Duration
+	OnLog            func(stream, line string)
 }
 
 type managedProcess interface {
@@ -55,6 +58,27 @@ func readinessTimeout(startup time.Duration) time.Duration {
 	return startup + controlPlaneReadinessGrace
 }
 
+func runArgsEnv(s RunSpec, urlFile string) ([]string, []string, error) {
+	args := []string{
+		"run",
+		"--control-plane.tunnel-id", s.TunnelID,
+		"--health.listen-addr", "127.0.0.1:0",
+		"--health.url-file", urlFile,
+		"--log.format", "json",
+		"--log.level", "debug",
+		"--mcp.server-url", s.MCPURL,
+	}
+	env := []string{"CONTROL_PLANE_API_KEY=" + s.APIKey}
+	if s.MCPAuthorization != "" {
+		if strings.ContainsAny(s.MCPAuthorization, "\r\n") {
+			return nil, nil, errors.New("Manager MCP authorization cannot contain line breaks")
+		}
+		args = append(args, "--mcp.extra-headers", "Authorization: env:"+managerMCPAuthorizationEnv)
+		env = append(env, managerMCPAuthorizationEnv+"="+s.MCPAuthorization)
+	}
+	return args, env, nil
+}
+
 func Start(ctx context.Context, s RunSpec) (*Runtime, error) {
 	if s.Binary == "" || s.TunnelID == "" || s.APIKey == "" || s.MCPURL == "" {
 		return nil, errors.New("tunnel-client binary, tunnel id, runtime API key, and Manager MCP URL are required")
@@ -72,16 +96,10 @@ func Start(ctx context.Context, s RunSpec) (*Runtime, error) {
 		return nil, err
 	}
 	urlFile := filepath.Join(s.HealthDir, fmt.Sprintf("health-%d.url", time.Now().UnixNano()))
-	args := []string{
-		"run",
-		"--control-plane.tunnel-id", s.TunnelID,
-		"--health.listen-addr", "127.0.0.1:0",
-		"--health.url-file", urlFile,
-		"--log.format", "json",
-		"--log.level", "debug",
-		"--mcp.server-url", s.MCPURL,
+	args, env, err := runArgsEnv(s, urlFile)
+	if err != nil {
+		return nil, err
 	}
-	env := []string{"CONTROL_PLANE_API_KEY=" + s.APIKey}
 	r := &Runtime{
 		shutdownTimeout: s.ShutdownTimeout,
 		done:            make(chan struct{}),
@@ -95,15 +113,8 @@ func Start(ctx context.Context, s RunSpec) (*Runtime, error) {
 		return nil, err
 	}
 	r.p = p
-	// tunnel-client's default control-plane poll is a 30-second long poll. The
-	// configured startup timeout is also 30 seconds by default, so using that
-	// exact deadline for the stronger control-plane readiness check creates a
-	// deterministic race. Add a small grace window for the first long poll.
 	readyCtx, cancel := context.WithTimeout(ctx, readinessTimeout(s.StartupTimeout))
 	defer cancel()
-	// Local /readyz proves the daemon and Manager MCP target are ready. The
-	// secure tunnel is not usable until tunnel-client has also completed at
-	// least one successful control-plane poll, so require that condition.
 	health, err := waitReady(readyCtx, urlFile, p)
 	if err != nil {
 		stopCtx, c := context.WithTimeout(context.Background(), s.ShutdownTimeout)

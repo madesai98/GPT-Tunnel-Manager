@@ -45,6 +45,37 @@ func TestReadinessTimeoutIncludesFirstLongPollGrace(t *testing.T) {
 	}
 }
 
+func TestRunArgsKeepManagerCapabilityOutOfArgv(t *testing.T) {
+	const authorization = "Bearer local-manager-capability"
+	args, env, err := runArgsEnv(RunSpec{
+		TunnelID:        "tunnel_0123456789abcdef0123456789abcdef",
+		APIKey:          "runtime-key",
+		MCPURL:          "http://127.0.0.1:12345/mcp",
+		MCPAuthorization: authorization,
+	}, "/tmp/health.url")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joinedArgs := strings.Join(args, "\x00")
+	if strings.Contains(joinedArgs, authorization) || strings.Contains(joinedArgs, "local-manager-capability") {
+		t.Fatalf("Manager capability leaked into argv: %q", joinedArgs)
+	}
+	if !strings.Contains(joinedArgs, "Authorization: env:"+managerMCPAuthorizationEnv) {
+		t.Fatalf("argv does not contain environment-backed Authorization header: %q", joinedArgs)
+	}
+	joinedEnv := strings.Join(env, "\x00")
+	if !strings.Contains(joinedEnv, managerMCPAuthorizationEnv+"="+authorization) {
+		t.Fatalf("Manager authorization missing from child environment: %q", joinedEnv)
+	}
+}
+
+func TestRunArgsRejectManagerAuthorizationLineBreaks(t *testing.T) {
+	_, _, err := runArgsEnv(RunSpec{MCPAuthorization: "Bearer value\r\nX-Evil: injected"}, "health.url")
+	if err == nil {
+		t.Fatal("expected Manager authorization with line breaks to be rejected")
+	}
+}
+
 func TestWaitReadyReturnsWhenTunnelClientExits(t *testing.T) {
 	process := &timeoutProcess{done: make(chan struct{}), err: errors.New("Manager MCP target exited")}
 	close(process.done)
