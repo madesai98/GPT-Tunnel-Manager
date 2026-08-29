@@ -42,11 +42,13 @@ func TestSection18SearchQualityGates(t *testing.T) {
 		}
 		if containsTool(result.Results, test.Want) {
 			criticalCorrect++
+		} else {
+			t.Logf("critical top-5 miss: query=%q want=%s got=%v", test.Query, test.Want, resultToolNames(result.Results))
 		}
 	}
 	criticalRate := float64(criticalCorrect) / float64(len(critical))
 	if criticalRate != 1 {
-		t.Fatalf("critical must-route top-5 accuracy %.2f, want 1.00", criticalRate)
+		t.Errorf("critical must-route top-5 accuracy %.2f, want 1.00", criticalRate)
 	}
 
 	general := corpus.General
@@ -58,18 +60,22 @@ func TestSection18SearchQualityGates(t *testing.T) {
 		}
 		if len(result.Results) > 0 && result.Results[0].ToolName == test.Want {
 			top1Correct++
+		} else {
+			t.Logf("general top-1 miss: query=%q want=%s got=%v", test.Query, test.Want, resultToolNames(result.Results))
 		}
 		if containsTool(result.Results, test.Want) {
 			top5Correct++
+		} else {
+			t.Logf("general top-5 miss: query=%q want=%s got=%v", test.Query, test.Want, resultToolNames(result.Results))
 		}
 	}
 	top1Rate := float64(top1Correct) / float64(len(general))
 	top5Rate := float64(top5Correct) / float64(len(general))
 	if top1Rate < 0.90 {
-		t.Fatalf("general top-1 accuracy %.3f, want >= 0.90", top1Rate)
+		t.Errorf("general top-1 accuracy %.3f, want >= 0.90", top1Rate)
 	}
 	if top5Rate < 0.98 {
-		t.Fatalf("general top-5 accuracy %.3f, want >= 0.98", top5Rate)
+		t.Errorf("general top-5 accuracy %.3f, want >= 0.98", top5Rate)
 	}
 
 	falsePositives := 0
@@ -80,11 +86,12 @@ func TestSection18SearchQualityGates(t *testing.T) {
 		}
 		if len(result.Results) != 0 {
 			falsePositives++
+			t.Logf("no-match false positive: query=%q got=%v", query, resultToolNames(result.Results))
 		}
 	}
 	falsePositiveRate := float64(falsePositives) / float64(len(corpus.NoMatch))
 	if falsePositiveRate > 0.02 {
-		t.Fatalf("no-match false-positive rate %.3f, want <= 0.02", falsePositiveRate)
+		t.Errorf("no-match false-positive rate %.3f, want <= 0.02", falsePositiveRate)
 	}
 
 	sources, err := cat.SourceTools(ctx, "gen_phase7")
@@ -119,11 +126,13 @@ func TestSection18SearchQualityGates(t *testing.T) {
 		}
 		if len(result.Results) > 0 && result.Results[0].ToolName == test.Want {
 			preferenceCorrect++
+		} else {
+			t.Logf("preference miss: query=%q context=%q want=%s got=%v", test.Query, test.Context, test.Want, resultToolNames(result.Results))
 		}
 	}
 	preferenceRate := float64(preferenceCorrect) / float64(len(corpus.Preference))
 	if preferenceRate != 1 {
-		t.Fatalf("explicit Routing Preference adherence %.2f, want 1.00", preferenceRate)
+		t.Errorf("explicit Routing Preference adherence %.2f, want 1.00", preferenceRate)
 	}
 
 	safetyCases := []struct {
@@ -148,7 +157,7 @@ func TestSection18SearchQualityGates(t *testing.T) {
 			t.Fatalf("safety case %d: %v", index, err)
 		}
 		if got != test.Want {
-			t.Fatalf("safety case %d = %s, want %s", index, got, test.Want)
+			t.Errorf("safety case %d = %s, want %s", index, got, test.Want)
 		}
 	}
 
@@ -168,6 +177,14 @@ func containsTool(results []SearchResult, name string) bool {
 		}
 	}
 	return false
+}
+
+func resultToolNames(results []SearchResult) []string {
+	names := make([]string, 0, len(results))
+	for _, result := range results {
+		names = append(names, result.ToolName)
+	}
+	return names
 }
 
 func routingSnapshot() routingstate.Snapshot {
