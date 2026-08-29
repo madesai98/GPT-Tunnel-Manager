@@ -17,15 +17,14 @@ import (
 )
 
 type RunSpec struct {
-	Binary              string
-	TunnelID            string
-	APIKey              string
-	MCPURL              string
-	HealthDir           string
-	StartupTimeout      time.Duration
-	ShutdownTimeout     time.Duration
-	TelemetryCompatible bool // Deprecated no-op retained for source compatibility during the v2 cutover.
-	OnLog               func(stream, line string)
+	Binary          string
+	TunnelID        string
+	APIKey          string
+	MCPURL          string
+	HealthDir       string
+	StartupTimeout  time.Duration
+	ShutdownTimeout time.Duration
+	OnLog           func(stream, line string)
 }
 
 type managedProcess interface {
