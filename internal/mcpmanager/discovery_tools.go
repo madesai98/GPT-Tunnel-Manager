@@ -6,21 +6,18 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/madesai98/GPT-Tunnel-Manager/internal/buildinfo"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/catalog"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/discovery"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const discoveryInstructions = "Discover indexed downstream tools and inspect authoritative invocation contracts before execution."
-
 type searchToolsOutput struct {
-	GenerationID       string                      `json:"generation_id,omitempty"`
+	GenerationID       string                       `json:"generation_id,omitempty"`
 	EffectiveProfile   *discovery.EffectiveProfile `json:"effective_profile,omitempty"`
-	PreferenceRevision uint64                      `json:"preference_revision,omitempty"`
-	Results            []discovery.SearchResult    `json:"results,omitempty"`
-	Error              *toolError                  `json:"error,omitempty"`
+	PreferenceRevision uint64                       `json:"preference_revision,omitempty"`
+	Results            []discovery.SearchResult     `json:"results,omitempty"`
+	Error              *toolError                   `json:"error,omitempty"`
 }
 
 // authoritativeToolOutput is the MCP-facing projection of the authoritative
@@ -45,21 +42,6 @@ type getToolOutput struct {
 	HumanIdentity   *discovery.HumanToolIdentity `json:"human_identity,omitempty"`
 	ExecutionHandle string                       `json:"execution_handle,omitempty"`
 	Error           *toolError                   `json:"error,omitempty"`
-}
-
-// NewDiscoveryServer composes the Phase 7 discovery/detail portion of the v2
-// Manager MCP contract. The complete fixed 19-tool upstream surface is composed
-// in Phase 10; this constructor deliberately does not stub or pull forward
-// indexing, preference-write, execution, lifecycle, callback, or Task routing.
-func NewDiscoveryServer(service *discovery.Service) *Server {
-	s := &Server{}
-	s.accepting.Store(true)
-	s.mcp = mcp.NewServer(
-		&mcp.Implementation{Name: "gpt-tunnel-manager", Version: buildinfo.Version},
-		&mcp.ServerOptions{Instructions: discoveryInstructions, Capabilities: &mcp.ServerCapabilities{}},
-	)
-	registerV2DiscoveryTools(s.mcp, service)
-	return s
 }
 
 func registerV2DiscoveryTools(server *mcp.Server, service *discovery.Service) {
