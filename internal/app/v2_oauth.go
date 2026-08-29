@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/downstream"
@@ -77,9 +76,6 @@ func (a *V2App) DisconnectOAuth(ctx context.Context, serverID string) error {
 		return err
 	}
 	_, err := a.state.ClearOAuthCredentialIdentity(ctx, serverID)
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return err
-	}
 	return err
 }
 
@@ -106,7 +102,7 @@ func (a *V2App) oauthServerEntry(serverID string) (v2config.ServerEntry, bool) {
 func (a *V2App) oauthStartOrRestart(ctx context.Context, serverID string) (routedlifecycle.Snapshot, error) {
 	for _, snapshot := range a.Snapshots() {
 		if snapshot.ServerID == serverID {
-			if snapshot.State == routedlifecycle.StateRunning || snapshot.State == routedlifecycle.StateStarting {
+			if snapshot.Running {
 				return a.RestartServer(ctx, serverID)
 			}
 			break
