@@ -10,7 +10,7 @@ Date: 2026-08-29
 
 Branch: `feature/v2-mcp-router`
 
-Status: **implementation in progress; Phases 1–6 complete, Phase 7 next**.
+Status: **implementation in progress; Phases 1–7 complete, Phase 8 next**.
 
 The canonical v2 implementation contract is `docs/V2_IMPLEMENTATION_PLAN.md`. `CONTEXT.md` and ADRs 0009 onward describe the accepted v2 architecture and supersede conflicting v1 topology assumptions where stated.
 
@@ -175,7 +175,7 @@ Complete through commit `9311d4bf0d5a5acbf517aeac8ba11957338179ed` (primary impl
 - content-addressed tool-enrichment artifacts whose dependencies include the authoritative tool, semantic neighbors, protocol version, and neighborhood context, with exact dependency/context reuse only;
 - a required enriched-embedding channel for accepted semantic guidance using the configured Phase 5 embedding provider/model identity, participating in generation dependency readiness;
 - a required global capability-reconciliation batch and validated capability-hierarchy artifact, including known-tool membership, parent existence, acyclic hierarchy validation, and coverage that assigns every indexed tool to reconciled capability data;
-- non-blocking Ambiguity Reviews generated only from accepted reconciliation output, with source-grounded summaries/comparative details, conditional use cases, and suggested preference options; open reviews do not block generation promotion and may be resolved after promotion without semantic reindexing;
+- non-blocking Ambiguity Reviews generated only from accepted reconciliation output, with source-grounded summaries/comparative details, conditional use cases, and suggested preference options; open reviews do not block promotion and may be resolved after promotion without semantic reindexing;
 - ambiguity validation that requires grounded comparative information for each competing tool without forcing invented symmetric pros/cons when the source only supports one side;
 - the accepted ten ToolAnnotation-derived executor classes with MCP annotation defaults normalized independently from semantic enrichment and routing preferences;
 - semantic-source plus normalized-executor preference-assumption fingerprints so preference state is bound to the authoritative semantic/execution assumptions it was written against;
@@ -193,7 +193,42 @@ Phase 6 exit gate is satisfied: required tool enrichment and global capability r
 
 ### Phase 7 — search quality and discovery semantics
 
-Next. Implement the accepted search-quality/fusion behavior on top of the completed deterministic retrieval, semantic-enrichment, capability, and routing-preference substrates. Do not pull later execution-handle/lifecycle work forward unless required by the canonical Phase 7 contract.
+Complete through commit `2819fd2ac06b840b470ad32d9681b53461141543` (primary discovery/handle implementation `760dc79c91cc06108d1d0a8076e83c57bf7aab57`).
+
+`internal/discovery`, `internal/executionhandle`, and the completed Phase 4–6 catalog/retrieval/enrichment/preference substrates now provide:
+
+- fail-closed discovery against only the current active Index Generation and Routing State Hash, with search returning `index_required` rather than consulting stale or incomplete semantic state;
+- query-time use of the configured embedding provider plus the bounded memory-only query cache, without persisting user query text or query vectors;
+- independent lexical/BM25, source-description vector, input-schema vector, enriched semantic-guidance vector, and capability-centroid retrieval signals over committed catalog state;
+- deterministic weighted reciprocal-rank fusion with stable tie-breaking and bounded Routing Preference adjustments rather than allowing preference overlays to replace semantic evidence;
+- explicit no-match thresholding that may return zero Tool References instead of filling the requested limit with low-confidence candidates;
+- Routing Profile precedence of explicit request profile over configured default profile over Global-only preferences, with an explicit missing profile returning `routing_profile_not_found` and no silent named-profile fallback;
+- compact Tool References that resolve only against the active generation and a `get_tool` detail path that keeps the original authoritative downstream tool contract separate from derived semantic guidance, capability membership, human-readable identity, normalized executor class, and execution material;
+- process-epoch HMAC-authenticated Execution Handles bound to generation ID, Server ID, tool name, authoritative source fingerprint, and normalized executor class, with tampering, cross-process reuse, and changed source/executor assumptions rejected;
+- reusable MCP registration for the two Phase 7 discovery/detail tools (`search_tools` and `get_tool`) without pulling the Phase 8 downstream execution router or Managed lifecycle/use-lease behavior forward;
+- deterministic integration fixtures built through the real catalog, persistent retrieval roles, enrichment artifacts, capability hierarchy, active-generation promotion, Routing Preferences, query cache, and handle manager rather than bypassing those boundaries with ranking-only mocks;
+- an explicit GitHub Actions Phase 7 quality-gate step so the Section 18 measurements remain visible and release-blocking on every CI run.
+
+Focused Phase 7 tests cover active-generation fail-closed behavior, zero-result no-match search, authoritative source-contract preservation, compact Tool Reference round-trips, `get_tool` semantic/capability separation, explicit/default/missing Routing Profile behavior, conditional preference precedence, handle tamper rejection, process-restart handle invalidation, source-fingerprint/executor binding, and the committed Section 18 evaluation corpus.
+
+Phase 7 quality CI run `33264318043` completed successfully. The recorded Section 18 results were:
+
+| Gate | Result | Required |
+| --- | ---: | ---: |
+| Critical must-route top-5 | 100.0% | 100% |
+| General top-1 | 96.4% | >= 90% |
+| General top-5 | 100.0% | >= 98% |
+| No-match false-positive rate | 2.0% | <= 2% |
+| Explicit Routing Preference adherence | 100.0% | 100% |
+| Executor/safety mapping | 100% | 100% |
+
+The same run passed `go mod tidy` with zero diff, `go test ./...`, the dedicated verbose Phase 7 discovery quality gate, `go vet ./...`, the Phase 5 retrieval benchmark step, native Linux/Windows/macOS GUI builds, Windows process/DPAPI checks, and all six headless `CGO_ENABLED=0` cross-build targets.
+
+Phase 7 exit gate is satisfied: every canonical Section 18 quality/safety threshold passes before execution routing is enabled, discovery remains index-backed and downstream-independent, preference/profile semantics are deterministic, and authenticated generation/source/executor-bound execution material is available for Phase 8 without Phase 8 dispatch having started.
+
+### Phase 8 — execution routing and permission-preserving dispatch
+
+Next. Implement the canonical execution router and ten permission-class dispatch paths on top of the Phase 7 discovery/detail and authenticated Execution Handle primitives. Do not begin later Managed lifecycle/use-lease or upstream protocol-surface phases until the Phase 8 exit gate passes.
 
 ## Clean v2 break
 
