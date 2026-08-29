@@ -8,6 +8,7 @@ import (
 	"testing"
 )
 
+// Scroll state must outlive individual Gio frames or wheel/trackpad movement is discarded.
 func TestV2ScrollablePagesUsePersistentListState(t *testing.T) {
 	required := map[string][]string{
 		"desktop_v2_server_editor.go": {"v2ServerEditorState.scroll.Layout"},
