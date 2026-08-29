@@ -15,6 +15,8 @@ type Store struct {
 	Root         string
 	AllocatePort func() (int, error)
 	Now          func() time.Time
+
+	freshInitBeforeCommit func(string) error
 }
 
 func NewStore(root string) *Store {
@@ -25,55 +27,90 @@ func (s *Store) ManagerPath() string { return filepath.Join(s.Root, "config", "m
 func (s *Store) ServersPath() string { return filepath.Join(s.Root, "config", "servers.json") }
 
 func (s *Store) LoadOrCreate() (ManagerConfig, ServersConfig, error) {
-	if err := os.MkdirAll(filepath.Join(s.Root, "config"), 0o700); err != nil {
-		return ManagerConfig{}, ServersConfig{}, err
+	managerExists, err := fileExists(s.ManagerPath())
+	if err != nil {
+		return ManagerConfig{}, ServersConfig{}, fmt.Errorf("inspect manager config: %w", err)
+	}
+	serversExists, err := fileExists(s.ServersPath())
+	if err != nil {
+		return ManagerConfig{}, ServersConfig{}, fmt.Errorf("inspect servers config: %w", err)
+	}
+
+	if !managerExists && !serversExists {
+		if _, err := os.Stat(filepath.Join(s.Root, "config")); err == nil {
+			return ManagerConfig{}, ServersConfig{}, errors.New("incomplete v2 configuration: config directory exists without manager.json and servers.json")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return ManagerConfig{}, ServersConfig{}, fmt.Errorf("inspect config directory: %w", err)
+		}
+		return s.initializeFresh()
+	}
+	if managerExists != serversExists {
+		return ManagerConfig{}, ServersConfig{}, errors.New("incomplete v2 configuration: manager.json and servers.json must both exist")
 	}
 
 	manager := ManagerConfig{}
-	servers := DefaultServersConfig()
-	createManager := false
-	createServers := false
-
+	servers := ServersConfig{}
 	if err := readJSON(s.ManagerPath(), &manager); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return ManagerConfig{}, ServersConfig{}, fmt.Errorf("load manager config: %w", err)
-		}
-		createManager = true
-		allocator := s.AllocatePort
-		if allocator == nil {
-			allocator = allocateLoopbackPort
-		}
-		port, err := allocator()
-		if err != nil {
-			return ManagerConfig{}, ServersConfig{}, fmt.Errorf("allocate local Manager MCP port: %w", err)
-		}
-		manager = DefaultManagerConfig(port)
+		return ManagerConfig{}, ServersConfig{}, fmt.Errorf("load manager config: %w", err)
 	}
-
 	if err := readJSON(s.ServersPath(), &servers); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return manager, ServersConfig{}, fmt.Errorf("load servers config: %w", err)
-		}
-		createServers = true
-		servers = DefaultServersConfig()
+		return ManagerConfig{}, ServersConfig{}, fmt.Errorf("load servers config: %w", err)
 	}
-
 	if err := ValidateManager(manager); err != nil {
 		return manager, servers, fmt.Errorf("validate manager config: %w", err)
 	}
 	if err := ValidateServers(servers); err != nil {
 		return manager, servers, fmt.Errorf("validate servers config: %w", err)
 	}
-	if createManager {
-		if err := s.SaveManager(manager); err != nil {
-			return manager, servers, err
+	return manager, servers, nil
+}
+
+func (s *Store) initializeFresh() (ManagerConfig, ServersConfig, error) {
+	allocator := s.AllocatePort
+	if allocator == nil {
+		allocator = allocateLoopbackPort
+	}
+	port, err := allocator()
+	if err != nil {
+		return ManagerConfig{}, ServersConfig{}, fmt.Errorf("allocate local Manager MCP port: %w", err)
+	}
+	manager := DefaultManagerConfig(port)
+	servers := DefaultServersConfig()
+	if err := ValidateManager(manager); err != nil {
+		return ManagerConfig{}, ServersConfig{}, fmt.Errorf("validate fresh manager config: %w", err)
+	}
+	if err := ValidateServers(servers); err != nil {
+		return ManagerConfig{}, ServersConfig{}, fmt.Errorf("validate fresh servers config: %w", err)
+	}
+	if err := os.MkdirAll(s.Root, 0o700); err != nil {
+		return ManagerConfig{}, ServersConfig{}, err
+	}
+
+	stage, err := os.MkdirTemp(s.Root, ".config-v2-init-*")
+	if err != nil {
+		return ManagerConfig{}, ServersConfig{}, fmt.Errorf("create fresh config staging directory: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.RemoveAll(stage)
+		}
+	}()
+	if err := atomicWriteJSON(filepath.Join(stage, "manager.json"), manager); err != nil {
+		return ManagerConfig{}, ServersConfig{}, fmt.Errorf("stage manager config: %w", err)
+	}
+	if err := atomicWriteJSON(filepath.Join(stage, "servers.json"), servers); err != nil {
+		return ManagerConfig{}, ServersConfig{}, fmt.Errorf("stage servers config: %w", err)
+	}
+	if s.freshInitBeforeCommit != nil {
+		if err := s.freshInitBeforeCommit(stage); err != nil {
+			return ManagerConfig{}, ServersConfig{}, err
 		}
 	}
-	if createServers {
-		if err := s.SaveServers(servers); err != nil {
-			return manager, servers, err
-		}
+	if err := os.Rename(stage, filepath.Join(s.Root, "config")); err != nil {
+		return ManagerConfig{}, ServersConfig{}, fmt.Errorf("commit fresh v2 configuration: %w", err)
 	}
+	committed = true
 	return manager, servers, nil
 }
 
@@ -166,6 +203,17 @@ func allocateLoopbackPort() (int, error) {
 		return 0, errors.New("loopback listener did not return a TCP port")
 	}
 	return address.Port, nil
+}
+
+func fileExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
 }
 
 func readJSON(path string, dst any) error {
