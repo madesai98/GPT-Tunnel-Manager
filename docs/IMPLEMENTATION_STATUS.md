@@ -10,7 +10,7 @@ Date: 2026-08-29
 
 Branch: `feature/v2-mcp-router`
 
-Status: **implementation in progress; Phases 1–9 complete, Phase 10 next**.
+Status: **implementation in progress; Phases 1–10 complete, Phase 11 next**.
 
 The canonical v2 implementation contract is `docs/V2_IMPLEMENTATION_PLAN.md`. `CONTEXT.md` and ADRs 0009 onward describe the accepted v2 architecture and supersede conflicting v1 topology assumptions where stated.
 
@@ -273,6 +273,32 @@ Focused Phase 9 tests cover unrelated-server concurrent acquisition, same-server
 Phase 9 implementation CI run `33267763059` completed successfully on `d41c3a9d12f4d4aabe94556d76fac594bf9b1f6e`: committed module-graph verification produced zero diff, `go test ./...` passed, the dedicated Phase 7 quality gate remained green, `go vet ./...` passed, the retrieval-scale benchmark step passed, native Linux/Windows/macOS GUI builds passed, Windows process/DPAPI checks passed, and all six headless `CGO_ENABLED=0` cross-build targets passed.
 
 Phase 9 exit gate and Checkpoint E-style routed lifecycle coverage are satisfied: Managed lifecycle starts from routed use, active calls/tasks retain explicit leases, idle shutdown is driven by Manager-owned direct activity rather than tunnel telemetry, unrelated servers are not serialized behind a registry-wide hot-path mutex, runtime/routing mutations fail `server_busy` during active use, crash/cancellation/shutdown cleanup is deterministic, and live contract drift remains fail-closed. Phase 10 — final upstream Manager MCP surface and protocol proxying — is next and has not been started as part of Phase 9.
+
+### Phase 10 — full Manager MCP upstream surface
+
+Complete through implementation commit `11f4ced1f78c7658e16f199a5636a2851a68b805`.
+
+`internal/mcpmanager`, `internal/indexing`, the continuation/catalog additions, and the completed Phase 3–9 downstream/routing substrates now provide:
+
+- one canonical loopback Manager MCP endpoint at `/mcp` routing both MCP 2026-07-28 modern stateless Streamable HTTP requests and older stateful legacy sessions into the same logical router implementation;
+- the fixed 19-tool Manager contract: five indexing/enrichment tools, two discovery/detail tools, two Routing Preference tools, and all ten permission-preserving executor classes with stable annotations independent of downstream tool count;
+- Manager-owned indexing orchestration for `index_status`, `index_refresh`, enrichment-batch retrieval/submission, and atomic `index_commit`, reusing the existing catalog, retrieval, enrichment, lifecycle, and routing-state correctness boundaries instead of duplicating them in the protocol layer;
+- optional local Bearer-capability protection backed by the Manager secret store, enabled by configuration, while browser-originated requests are rejected unconditionally whether capability protection is enabled or disabled;
+- one continuation service shared by routed execution and the upstream protocol, with persistent opaque Manager task/resource mappings stored in the catalog and HMAC-authenticated Manager-owned resource references;
+- downstream Task proxying that rewrites downstream task IDs into Manager-owned opaque IDs, keeps bounded Managed task-use leases alive until terminal state or expiry, supports get/update/cancel continuation operations, and can re-establish durable task mappings after Manager restart without replaying the originating tool call;
+- resource-link continuation proxying that rewrites only downstream `ResourceLink` URIs, leaves embedded resources unchanged, persists the original downstream URI internally, reacquires the correct routed lifecycle session for a later read, and forwards the original resource request;
+- narrow Tasks wire-response compatibility around the official Go SDK so polymorphic downstream task results can traverse the Manager endpoint without replacing the SDK transport/protocol implementation;
+- legacy callback forwarding for elicitation, sampling, and roots through the routed downstream session, including serialized callback-capable legacy calls and stable rejection when the upstream client lacks a required callback capability;
+- shared routed lifecycle/session acquisition for execution, task follow-up, resource follow-up, and callbacks, preserving the existing Phase 8/9 fail-closed live-contract checks, exactly-once dispatch boundary, per-server concurrency, and active-use accounting;
+- JSON-valued MCP projections for enrichment-batch request/response payloads and authoritative tool contracts so generated Manager output schemas match the actual object-shaped wire data rather than exposing `json.RawMessage` as byte arrays;
+- canonical capability-reconciliation artifact identity based on the exact stored canonical batch request representation, eliminating prepare/submit key-order dependence while retaining immutable-batch and corruption checks;
+- serialization-stable downstream tool snapshots whose fingerprints remain self-consistent after cloning/persistence round trips, preventing false live-contract invalidation while preserving real drift detection.
+
+Focused Phase 10 integration coverage uses a real modern MCP client and raw legacy protocol requests against the canonical endpoint. It verifies the stable fixed tool surface/annotations, complete `index_refresh -> enrichment batch -> submit -> index_commit -> search_tools -> get_tool -> executor` workflow, authoritative-contract object projection, routed downstream execution, Manager-owned resource-link rewriting and follow-up `resources/read`, local capability enforcement, unconditional browser-Origin rejection, and modern/legacy dispatch behavior. Existing focused continuation/callback/downstream suites retain the task, legacy callback, cancellation, result-fidelity, and lifecycle guarantees inherited by the canonical server.
+
+Phase 10 implementation CI run `33272556036` completed successfully on `11f4ced1f78c7658e16f199a5636a2851a68b805`: committed module-graph verification produced zero diff, `go test ./...` passed including the new canonical upstream integration workflow, the dedicated Phase 7 discovery quality gate remained green, `go vet ./...` passed, the retrieval-scale benchmark step passed, native Linux/Windows/macOS GUI builds passed, Windows process/DPAPI checks passed, and all six headless `CGO_ENABLED=0` cross-build targets passed.
+
+Phase 10 exit gate is satisfied at the implementation level: representative modern and legacy upstream clients see the stable 19-tool Manager contract and complete tool workflows, protocol-required task/resource/callback continuations remain routed through Manager-owned mappings and lifecycle leases, local access protection/Origin rejection is enforced at the one-URL boundary, and the integration client exercises the real catalog/index/discovery/execution path rather than registration-only mocks. Phase 11 native UI/bootstrap migration has not been started as part of Phase 10.
 
 ## Clean v2 break
 
