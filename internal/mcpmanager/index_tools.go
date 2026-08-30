@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/catalog"
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/enrichment"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/indexing"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -36,6 +37,8 @@ type indexGetBatchInput struct {
 // json.RawMessage, but reflecting RawMessage directly into an MCP output schema
 // describes it as []byte (an array). On the wire these fields are arbitrary JSON
 // values, so decode them before handing the object to the typed MCP tool layer.
+// Protocol metadata is injected here at read time, so even batches persisted by
+// an older Manager become fully self-describing after an upgrade.
 type indexEnrichmentBatch struct {
 	ID                   string                      `json:"batch_id"`
 	GenerationID         string                      `json:"generation_id"`
@@ -43,6 +46,9 @@ type indexEnrichmentBatch struct {
 	BatchKey             string                      `json:"batch_key"`
 	Required             bool                        `json:"required"`
 	RequestFingerprint   string                      `json:"request_fingerprint"`
+	Protocol             string                      `json:"protocol" jsonschema:"Enrichment protocol version that governs this batch and its response."`
+	ResponseSchema       any                         `json:"response_schema" jsonschema:"Exact JSON Schema for the response value accepted by index_submit_enrichment_batch. Follow this schema instead of guessing protocol fields."`
+	AgentInstructions    []string                    `json:"agent_instructions" jsonschema:"Protocol-local instructions injected by GPT Tunnel Manager so a fresh agent can complete the batch without external prompt or skill context."`
 	Request              any                         `json:"request" jsonschema:"Immutable enrichment request JSON for the declared batch protocol."`
 	AcceptedFingerprint  string                      `json:"accepted_fingerprint,omitempty"`
 	AcceptedResponse     any                         `json:"accepted_response,omitempty" jsonschema:"Previously accepted agent response JSON, when this batch has already been accepted."`
@@ -57,7 +63,7 @@ type indexGetBatchOutput struct {
 
 type indexSubmitBatchInput struct {
 	BatchID  string `json:"batch_id" jsonschema:"Immutable enrichment batch identifier returned by index_get_enrichment_batch."`
-	Response any    `json:"response" jsonschema:"Agent-produced response matching the protocol and request carried by the immutable batch."`
+	Response any    `json:"response" jsonschema:"Agent-produced response. Fetch the batch first and follow its response_schema and agent_instructions exactly. Unknown response fields are rejected."`
 }
 
 type indexSubmitBatchOutput struct {
@@ -109,7 +115,7 @@ func registerV2IndexTools(server *mcp.Server, service *indexing.Service) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "index_get_enrichment_batch", Title: "Get enrichment work",
-		Description: "Return immutable unclaimed enrichment work. Required tool_enrichment and capability_reconciliation work blocks commit; ambiguity_review work is optional and non-blocking.",
+		Description: "Return immutable unclaimed enrichment work. Every batch includes its exact response_schema and protocol-local agent_instructions so no external GPT Tunnel Manager prompt or skill knowledge is required. Required tool_enrichment and capability_reconciliation work blocks commit; ambiguity_review work is optional and non-blocking.",
 		Annotations: &mcp.ToolAnnotations{Title: "Get enrichment work", ReadOnlyHint: true, DestructiveHint: &nondestructive, IdempotentHint: true, OpenWorldHint: &closed},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input indexGetBatchInput) (*mcp.CallToolResult, indexGetBatchOutput, error) {
 		if service == nil {
@@ -128,7 +134,7 @@ func registerV2IndexTools(server *mcp.Server, service *indexing.Service) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "index_submit_enrichment_batch", Title: "Submit enrichment work",
-		Description: "Submit one immutable enrichment batch. The first valid response is accepted, an identical repeat is idempotent, and conflicting repeats fail closed.",
+		Description: "Submit one immutable enrichment batch using the response_schema returned with that batch. Unknown fields are rejected. The first valid response is accepted, an identical repeat is idempotent, and conflicting repeats fail closed.",
 		Annotations: &mcp.ToolAnnotations{Title: "Submit enrichment work", ReadOnlyHint: false, DestructiveHint: &nondestructive, IdempotentHint: true, OpenWorldHint: &closed},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input indexSubmitBatchInput) (*mcp.CallToolResult, indexSubmitBatchOutput, error) {
 		if service == nil {
@@ -178,6 +184,13 @@ func projectIndexBatch(batch catalog.EnrichmentBatch) (indexEnrichmentBatch, err
 	if err != nil {
 		return indexEnrichmentBatch{}, err
 	}
+	descriptor, err := enrichment.ProtocolDescriptorForBatchKind(batch.Kind)
+	if err != nil {
+		return indexEnrichmentBatch{}, err
+	}
+	if err := validateProjectedBatchProtocol(request, descriptor.Protocol, batch.ID); err != nil {
+		return indexEnrichmentBatch{}, err
+	}
 	var accepted any
 	if len(batch.AcceptedResponseJSON) != 0 {
 		accepted, err = decodeIndexJSONValue(batch.AcceptedResponseJSON, "accepted response", batch.ID)
@@ -192,12 +205,30 @@ func projectIndexBatch(batch catalog.EnrichmentBatch) (indexEnrichmentBatch, err
 		BatchKey: batch.BatchKey,
 		Required: batch.Required,
 		RequestFingerprint: batch.RequestFingerprint,
+		Protocol: descriptor.Protocol,
+		ResponseSchema: descriptor.ResponseSchema,
+		AgentInstructions: append([]string(nil), descriptor.AgentInstructions...),
 		Request: request,
 		AcceptedFingerprint: batch.AcceptedFingerprint,
 		AcceptedResponse: accepted,
 		CreatedAt: batch.CreatedAt,
 		AcceptedAt: batch.AcceptedAt,
 	}, nil
+}
+
+func validateProjectedBatchProtocol(request any, expected, batchID string) error {
+	object, ok := request.(map[string]any)
+	if !ok {
+		return fmt.Errorf("enrichment batch %s request is not a JSON object", batchID)
+	}
+	protocol, ok := object["protocol"].(string)
+	if !ok || protocol == "" {
+		return fmt.Errorf("enrichment batch %s request is missing protocol", batchID)
+	}
+	if protocol != expected {
+		return fmt.Errorf("enrichment batch %s protocol %q does not match kind contract %q", batchID, protocol, expected)
+	}
+	return nil
 }
 
 func decodeIndexJSONValue(body json.RawMessage, field, batchID string) (any, error) {
