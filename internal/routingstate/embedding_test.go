@@ -32,6 +32,25 @@ func TestChangingSelectedEmbeddingModelInvalidatesRoutingHash(t *testing.T) {
 	}
 }
 
+func TestEmbeddingPipelineVersionParticipatesInRoutingHash(t *testing.T) {
+	material := ConfigMaterial(v2config.DefaultManagerConfig(43127), v2config.DefaultServersConfig())
+	if material.Embedding.PipelineVersion != EmbeddingPipelineVersion {
+		t.Fatalf("pipeline version = %q, want %q", material.Embedding.PipelineVersion, EmbeddingPipelineVersion)
+	}
+	before, err := ComputeHash(material)
+	if err != nil {
+		t.Fatal(err)
+	}
+	material.Embedding.PipelineVersion = "different-pipeline"
+	after, err := ComputeHash(material)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Fatal("embedding pipeline version change did not invalidate routing hash")
+	}
+}
+
 func TestLegacyOnlineEmbeddingHashResolvesToLocalDefault(t *testing.T) {
 	legacy := v2config.DefaultManagerConfig(43127)
 	legacy.Embedding = v2config.EmbeddingConfig{
