@@ -149,7 +149,7 @@ func validateEmbedding(c EmbeddingConfig) error {
 		if filepath.Base(model.FileName) != model.FileName || model.FileName == "." || model.FileName == "" {
 			return fmt.Errorf("embedding.models[%d].file_name must be a file name without directories", i)
 		}
-		if model.SHA256 != "" && !sha256Pattern.MatchString(model.SHA256) {
+		if !sha256Pattern.MatchString(model.SHA256) {
 			return fmt.Errorf("embedding.models[%d].sha256 must be 64 lowercase hexadecimal characters", i)
 		}
 		if model.Dimensions <= 0 || model.Dimensions > 65536 {
