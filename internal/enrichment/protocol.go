@@ -157,7 +157,7 @@ func ProtocolDescriptorForBatchKind(kind catalog.EnrichmentBatchKind) (BatchProt
 		instructions = []string{
 			"Build a semantic capability hierarchy from the supplied authoritative tool contracts and completed tool enrichment.",
 			"Set hierarchy.protocol to capability-reconciliation/v1 and use tool_members exactly; do not invent aliases such as tools.",
-			"Every supplied tool.member_key must be assigned to at least one capability. Capability ids and names must be non-empty, parent_id must reference another returned capability, and the hierarchy must be acyclic.",
+			"Every supplied tool.member_key across every request page must be assigned to at least one capability. Capability ids and names must be non-empty, parent_id must reference another returned capability, and the hierarchy must be acyclic.",
 			"Group by actual user-facing capability, not merely by source server. Preserve distinctions when tools differ by interaction mode, runtime, build/compile/test purpose, application domain, live vs headless execution, UI state vs screenshots vs rendering, or other routing-relevant behavior visible in the contracts.",
 			"Only emit ambiguities when two or more tools genuinely compete for the same intent. For each ambiguity include source-grounded pros/cons, conditional use cases, and actionable suggested options.",
 			"After successful submission, process available ambiguity_review batches when present, then commit once index_status reports pending_required=0. Open Ambiguity Reviews are non-blocking, but process those that can be resolved without inventing user preferences.",
@@ -176,6 +176,7 @@ func ProtocolDescriptorForBatchKind(kind catalog.EnrichmentBatchKind) (BatchProt
 		return BatchProtocolDescriptor{}, fmt.Errorf("unsupported enrichment batch kind %q", kind)
 	}
 	instructions = append(instructions,
+		"The immutable request may be returned in bounded pages. Inspect request_page on every index_get_enrichment_batch result. If request_page.complete=false, call index_get_enrichment_batch again with the same kind and request_offset=request_page.next_offset; keep batch_id and request_fingerprint consistent and collect every page before constructing or submitting the response.",
 		"Submit only JSON matching response_schema. If submission is rejected for schema or validation reasons, use the returned error immediately to correct and retry; do not search for private protocol documentation or ask the user unless there is an actual runtime or configuration blocker.",
 	)
 	var schema any

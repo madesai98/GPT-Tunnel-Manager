@@ -47,14 +47,24 @@ func (e *Error) Unwrap() error {
 	return e.cause
 }
 
+type EnrichmentKindState struct {
+	Kind     catalog.EnrichmentBatchKind `json:"kind"`
+	Required bool                        `json:"required"`
+	Pending  int                         `json:"pending"`
+	Accepted int                         `json:"accepted"`
+}
+
 type Status struct {
-	RoutingStateHash    string `json:"routing_state_hash,omitempty"`
-	ActiveGenerationID  string `json:"active_generation_id,omitempty"`
-	StagingGenerationID string `json:"staging_generation_id,omitempty"`
-	Ready               bool   `json:"ready"`
-	PendingRequired     int    `json:"pending_required"`
-	OpenReviews         int    `json:"open_reviews"`
-	AcceptedRequired    int    `json:"accepted_required"`
+	RoutingStateHash    string                `json:"routing_state_hash,omitempty"`
+	ActiveGenerationID  string                `json:"active_generation_id,omitempty"`
+	StagingGenerationID string                `json:"staging_generation_id,omitempty"`
+	Ready               bool                  `json:"ready"`
+	PendingRequired     int                   `json:"pending_required"`
+	OpenReviews         int                   `json:"open_reviews"`
+	AcceptedRequired    int                   `json:"accepted_required"`
+	BatchStates         []EnrichmentKindState `json:"batch_states,omitempty"`
+	PromotionBlockers   []string              `json:"promotion_blockers,omitempty"`
+	NextAction          string                `json:"next_action,omitempty"`
 }
 
 type RefreshResult struct {
@@ -139,8 +149,72 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 		status.PendingRequired = counts.PendingRequired
 		status.OpenReviews = counts.PendingOptional
 		status.AcceptedRequired = counts.AcceptedRequired
+
+		kinds := []struct {
+			kind     catalog.EnrichmentBatchKind
+			required bool
+		}{
+			{catalog.BatchToolEnrichment, true},
+			{catalog.BatchCapabilityReconciliation, true},
+			{catalog.BatchAmbiguityReview, false},
+		}
+		for _, entry := range kinds {
+			pending, accepted, err := s.batchKindCounts(ctx, countsGenerationID, entry.kind)
+			if err != nil {
+				return Status{}, err
+			}
+			if pending != 0 || accepted != 0 {
+				status.BatchStates = append(status.BatchStates, EnrichmentKindState{
+					Kind: entry.kind, Required: entry.required, Pending: pending, Accepted: accepted,
+				})
+			}
+			if status.StagingGenerationID != "" && entry.required && pending != 0 {
+				status.PromotionBlockers = append(status.PromotionBlockers, fmt.Sprintf("%d %s batch(es) remain pending", pending, entry.kind))
+			}
+		}
+
+		if status.StagingGenerationID != "" {
+			toolPending := statePending(status.BatchStates, catalog.BatchToolEnrichment)
+			capabilityPending := statePending(status.BatchStates, catalog.BatchCapabilityReconciliation)
+			reviewPending := statePending(status.BatchStates, catalog.BatchAmbiguityReview)
+			switch {
+			case toolPending > 0:
+				status.NextAction = "Call index_get_enrichment_batch with kind=tool_enrichment and process every pending batch. Follow request_page until complete for any paged request, then submit it with index_submit_enrichment_batch."
+			case capabilityPending > 0:
+				status.NextAction = "Call index_get_enrichment_batch with kind=capability_reconciliation. Follow request_page.next_offset until request_page.complete=true, reconcile every supplied tool, then submit the one global response with index_submit_enrichment_batch."
+			case reviewPending > 0:
+				status.NextAction = "Required enrichment is complete. Process ambiguity_review batches that can be resolved without inventing preferences, then call index_commit; open reviews do not block promotion."
+			default:
+				status.NextAction = "All required enrichment is complete. Call index_commit to promote the staging generation."
+			}
+		} else if status.OpenReviews > 0 {
+			status.NextAction = "The active index is ready. Optional ambiguity_review batches remain and may be processed without rebuilding or re-promoting the generation."
+		}
 	}
 	return status, nil
+}
+
+func statePending(states []EnrichmentKindState, kind catalog.EnrichmentBatchKind) int {
+	for _, state := range states {
+		if state.Kind == kind {
+			return state.Pending
+		}
+	}
+	return 0
+}
+
+func (s *Service) batchKindCounts(ctx context.Context, generationID string, kind catalog.EnrichmentBatchKind) (pending, accepted int, err error) {
+	err = s.catalog.DB().QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(CASE WHEN accepted_fingerprint IS NULL THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN accepted_fingerprint IS NOT NULL THEN 1 ELSE 0 END), 0)
+		FROM enrichment_batches
+		WHERE generation_id = ? AND kind = ?
+	`, generationID, string(kind)).Scan(&pending, &accepted)
+	if err != nil {
+		return 0, 0, fmt.Errorf("count %s enrichment batch states: %w", kind, err)
+	}
+	return pending, accepted, nil
 }
 
 func (s *Service) Refresh(ctx context.Context) (RefreshResult, error) {
@@ -255,7 +329,7 @@ func (s *Service) Commit(ctx context.Context) (CommitResult, error) {
 		return CommitResult{}, err
 	}
 	if counts.PendingRequired != 0 {
-		return CommitResult{}, &Error{Code: "required_enrichment_pending", Message: fmt.Sprintf("%d required enrichment batch(es) remain pending", counts.PendingRequired)}
+		return CommitResult{}, &Error{Code: "required_enrichment_pending", Message: fmt.Sprintf("%d required enrichment batch(es) remain pending; call index_status for exact promotion_blockers and next_action", counts.PendingRequired)}
 	}
 	hash, ready := s.routing.CurrentRoutingStateHash()
 	if !ready || hash == "" {
