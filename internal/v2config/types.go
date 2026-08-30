@@ -93,13 +93,14 @@ type ServersConfig struct {
 }
 
 type ServerEntry struct {
-	ID          string              `json:"id"`
-	Name        string              `json:"name"`
-	Mode        ServerMode          `json:"mode"`
-	Transport   TransportConfig     `json:"transport"`
-	Environment EnvironmentConfig   `json:"environment"`
-	Runtime     RuntimeConfig       `json:"runtime"`
-	Logging     ServerLoggingConfig `json:"logging"`
+	ID             string               `json:"id"`
+	Name           string               `json:"name"`
+	Mode           ServerMode           `json:"mode"`
+	Transport      TransportConfig      `json:"transport"`
+	Environment    EnvironmentConfig    `json:"environment"`
+	Runtime        RuntimeConfig        `json:"runtime"`
+	Logging        ServerLoggingConfig  `json:"logging"`
+	ToolVisibility ToolVisibilityConfig `json:"tool_visibility,omitempty"`
 }
 
 type ServerMode string
@@ -188,6 +189,19 @@ type RuntimeConfig struct {
 
 type ServerLoggingConfig struct {
 	CaptureLevelOverride *string `json:"capture_level_override,omitempty"`
+}
+
+type ToolVisibilityConfig struct {
+	Hidden []string `json:"hidden,omitempty"`
+}
+
+func (e ServerEntry) ToolExposed(name string) bool {
+	for _, hidden := range e.ToolVisibility.Hidden {
+		if hidden == name {
+			return false
+		}
+	}
+	return true
 }
 
 func DefaultManagerConfig(port int) ManagerConfig {

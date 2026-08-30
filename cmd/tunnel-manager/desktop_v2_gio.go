@@ -32,6 +32,7 @@ type v2ServerActions struct {
 	restart widget.Clickable
 	oauth   widget.Clickable
 	edit    widget.Clickable
+	tools   widget.Clickable
 	remove  widget.Clickable
 	toggle  widget.Clickable
 }

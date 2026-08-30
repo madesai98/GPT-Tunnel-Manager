@@ -16,11 +16,15 @@ import (
 )
 
 func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
+	if v2ToolVisibilityEditorActive() {
+		return v2ToolVisibilityEditorPage(u, gtx)
+	}
 	if v2ServerEditorActive() {
 		return v2ServerEditorPage(u, gtx)
 	}
 	entries := u.core.Entries()
 	manager := u.core.ManagerConfig()
+	toolCounts := u.core.KnownServerToolCounts(context.Background())
 	snapshots := make(map[string]routedlifecycle.Snapshot)
 	for _, snapshot := range u.core.Snapshots() {
 		snapshots[snapshot.ServerID] = snapshot
@@ -72,6 +76,15 @@ func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 			for actions.edit.Clicked(gtx) {
 				openExistingV2ServerEditor(entry)
 				u.invalidate()
+			}
+			for actions.tools.Clicked(gtx) {
+				names, err := u.core.KnownServerToolNames(context.Background(), entry.ID)
+				if err != nil {
+					u.setMessage("loading tools for " + entry.Name + ": " + err.Error())
+				} else {
+					openV2ToolVisibilityEditor(entry, names)
+					u.invalidate()
+				}
 			}
 			for actions.remove.Clicked(gtx) {
 				id := entry.ID
@@ -137,7 +150,7 @@ func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 								return layout.Flex{Alignment: layout.Middle}.Layout(gtx, children...)
 							}),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return layout.Inset{Top: unit.Dp(3)}.Layout(gtx, faintCaption(u.th, fmt.Sprintf("%s · active leases %d · %s", entry.Transport.Type, snapshot.ActiveCallCount, entry.ID)))
+								return layout.Inset{Top: unit.Dp(3)}.Layout(gtx, faintCaption(u.th, fmt.Sprintf("%s · %d tools · %s", entry.Transport.Type, toolCounts[entry.ID], entry.ID)))
 							}),
 						)
 					}),
@@ -169,6 +182,9 @@ func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 							}))
 						}
 						children = append(children,
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, v2ServerIconButton(u.th, &actions.tools, "≡"))
+							}),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, v2ServerIconButton(u.th, &actions.edit, "✎"))
 							}),

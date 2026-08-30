@@ -289,6 +289,9 @@ func (s *Service) populateBaseIndex(ctx context.Context, generationID string) er
 			return err
 		}
 		for _, tool := range snapshot.Tools {
+			if !entry.ToolExposed(tool.Name) {
+				continue
+			}
 			fingerprint, _, err := toolcontract.FingerprintTool(tool)
 			if err != nil {
 				return err
