@@ -47,55 +47,40 @@ func TestCapabilityProtocolDocumentsToolMembersExactly(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(body)
-	if !strings.Contains(text, `"tool_members"`) {
+	if !strings.Contains(text, "\"tool_members\"") {
 		t.Fatalf("capability schema does not document tool_members: %s", text)
 	}
-	if strings.Contains(text, `"tools"`) {
+	if strings.Contains(text, "\"tools\"") {
 		t.Fatalf("capability schema exposes guessed tools field: %s", text)
 	}
 }
 
 func TestCapabilityResponseRejectsUnknownToolsField(t *testing.T) {
-	body := []byte(`{
-		"hierarchy": {
-			"protocol": "capability-reconciliation/v1",
-			"capabilities": [{"id":"search", "name":"Search", "tools":["srv/tool"]}]
-		}
-	}`)
+	body := []byte("{\"hierarchy\":{\"protocol\":\"capability-reconciliation/v1\",\"capabilities\":[{\"id\":\"search\",\"name\":\"Search\",\"tools\":[\"srv/tool\"]}]}}")
 	var response CapabilityBatchResponse
 	err := json.Unmarshal(body, &response)
 	if err == nil {
 		t.Fatal("expected unknown tools field to be rejected")
 	}
-	if !strings.Contains(err.Error(), `unknown field "tools"`) {
+	if !strings.Contains(err.Error(), "unknown field \"tools\"") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestProtocolResponsesRejectNestedUnknownFields(t *testing.T) {
-	body := []byte(`{
-		"items": [{
-			"member_key": "srv/tool",
-			"guidance": {"purpose":"Searches things", "use_when_typo":["search"]}
-		}]
-	}`)
+	body := []byte("{\"items\":[{\"member_key\":\"srv/tool\",\"guidance\":{\"purpose\":\"Searches things\",\"use_when_typo\":[\"search\"]}}]}")
 	var response ToolBatchResponse
 	err := json.Unmarshal(body, &response)
 	if err == nil {
 		t.Fatal("expected nested unknown guidance field to be rejected")
 	}
-	if !strings.Contains(err.Error(), `unknown field "use_when_typo"`) {
+	if !strings.Contains(err.Error(), "unknown field \"use_when_typo\"") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestValidCapabilityResponseStillDecodes(t *testing.T) {
-	body := []byte(`{
-		"hierarchy": {
-			"protocol": "capability-reconciliation/v1",
-			"capabilities": [{"id":"search", "name":"Search", "tool_members":["srv/tool"]}]
-		}
-	}`)
+	body := []byte("{\"hierarchy\":{\"protocol\":\"capability-reconciliation/v1\",\"capabilities\":[{\"id\":\"search\",\"name\":\"Search\",\"tool_members\":[\"srv/tool\"]}]}}")
 	var response CapabilityBatchResponse
 	if err := json.Unmarshal(body, &response); err != nil {
 		t.Fatalf("valid response rejected: %v", err)
