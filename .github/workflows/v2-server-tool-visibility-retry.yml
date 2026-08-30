@@ -42,6 +42,15 @@ jobs:
           bash /tmp/visibility-patch.sh
           python3 - <<'PY'
           from pathlib import Path
+
+          editor = Path('cmd/tunnel-manager/desktop_v2_tool_visibility.go')
+          editor_text = editor.read_text()
+          old_tail = '\t\t\t\t}))(gtx)\n\t\t\t})\n'
+          new_tail = '\t\t\t\t}))\n\t\t\t})\n'
+          if editor_text.count(old_tail) != 1:
+              raise SystemExit(f'expected one erroneous editor layout tail, found {editor_text.count(old_tail)}')
+          editor.write_text(editor_text.replace(old_tail, new_tail, 1))
+
           p = Path('internal/routedlifecycle/service.go')
           text = p.read_text()
           old = '\t\tst.session = connected\n\t\tst.generation++\n'
@@ -50,7 +59,7 @@ jobs:
               raise SystemExit(f'expected one Acquire connection assignment, found {text.count(old)}')
           p.write_text(text.replace(old, new, 1))
           PY
-          gofmt -w internal/routedlifecycle/service.go
+          gofmt -w internal/routedlifecycle/service.go cmd/tunnel-manager/desktop_v2_tool_visibility.go
           git diff --check
           go test ./internal/v2config ./internal/routedlifecycle ./internal/indexing ./internal/app
           go test ./cmd/tunnel-manager
