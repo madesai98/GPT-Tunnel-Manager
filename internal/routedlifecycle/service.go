@@ -169,12 +169,12 @@ func New(ctx context.Context, manager v2config.ManagerConfig, servers v2config.S
 	}
 	serviceCtx, cancel := context.WithCancel(ctx)
 	s := &Service{
-		ctx:          serviceCtx,
-		cancel:       cancel,
-		connect:      connect,
-		defaultIdle:  manager.ManagedDefaults.IdleTimeoutSeconds,
-		maxTaskLease: maximumTaskLease,
-		states:       make(map[string]*serverState, len(servers.Servers)),
+		ctx:           serviceCtx,
+		cancel:        cancel,
+		connect:       connect,
+		defaultIdle:   manager.ManagedDefaults.IdleTimeoutSeconds,
+		maxTaskLease:  maximumTaskLease,
+		states:        make(map[string]*serverState, len(servers.Servers)),
 	}
 	for _, entry := range servers.Servers {
 		s.states[entry.ID] = newServerState(entry)

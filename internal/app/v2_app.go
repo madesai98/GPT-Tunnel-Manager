@@ -334,6 +334,189 @@ func (a *V2App) Snapshots() []routedlifecycle.Snapshot {
 	return a.lifecycle.Snapshots()
 }
 
+func (a *V2App) ManagerSnapshot() V2ManagerSnapshot {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	url := ""
+	if a.mcp != nil {
+		url = a.mcp.URL()
+	}
+	return V2ManagerSnapshot{
+		MCPURL: url, Running: a.started,
+		AccessProtectionEnabled: a.manager.LocalManager.AccessProtectionEnabled,
+		ManagerTunnelEnabled: a.manager.ManagerTunnel.Enabled,
+		ManagerTunnelID: a.manager.ManagerTunnel.TunnelID,
+	}
+}
+
+func (a *V2App) SaveManager(ctx context.Context, next v2config.ManagerConfig) error {
+	next.ManagerTunnel.RuntimeCredentialRef = v2config.ManagerRuntimeCredentialRef
+	if err := v2config.ValidateManager(next); err != nil {
+		return err
+	}
+	provider, err := embedding.NewProvider(next.Embedding, a.secrets, nil)
+	if err != nil {
+		return err
+	}
+	old := a.ManagerConfig()
+	rollback := func() {}
+	if a.product != nil {
+		rollback, err = a.product.prepareManagerChange(ctx, old, next)
+		if err != nil {
+			return err
+		}
+	}
+
+	a.mu.Lock()
+	oldServer := a.mcp
+	wasStarted := a.started
+	if _, err := a.state.SaveManager(ctx, next); err != nil {
+		a.mu.Unlock()
+		rollback()
+		return err
+	}
+	if err := a.embedding.Swap(provider); err != nil {
+		a.mu.Unlock()
+		return err
+	}
+	if wasStarted && oldServer != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = oldServer.Shutdown(shutdownCtx)
+		cancel()
+	}
+	if err := a.rebuildManagerLocked(ctx, next); err != nil {
+		a.started = false
+		a.mu.Unlock()
+		return err
+	}
+	if wasStarted {
+		if err := a.mcp.Start(); err != nil {
+			a.started = false
+			a.mu.Unlock()
+			return err
+		}
+	}
+	a.manager = cloneManagerConfig(next)
+	a.mu.Unlock()
+	if a.product != nil {
+		a.product.managerChanged(a, old, next)
+	}
+	return nil
+}
+
+func (a *V2App) SetLocalManagerProtection(ctx context.Context, enabled bool) error {
+	manager := a.ManagerConfig()
+	manager.LocalManager.AccessProtectionEnabled = enabled
+	return a.SaveManager(ctx, manager)
+}
+
+func (a *V2App) SetEmbedding(ctx context.Context, cfg v2config.EmbeddingConfig, credential []byte) error {
+	cfg.CredentialRef = v2config.EmbeddingCredentialRef
+	if len(credential) != 0 {
+		if _, err := a.state.PutSecret(ctx, cfg.CredentialRef, append([]byte(nil), credential...)); err != nil {
+			return err
+		}
+		if a.product != nil {
+			a.product.log.Redactor().Register(credential)
+		}
+	}
+	manager := a.ManagerConfig()
+	manager.Embedding = cfg
+	return a.SaveManager(ctx, manager)
+}
+
+func (a *V2App) EmbeddingCredentialConfigured(ctx context.Context) bool {
+	_, err := a.secrets.Get(ctx, v2config.EmbeddingCredentialRef)
+	return err == nil
+}
+
+func StaticAuthSecretRef(serverID string) string {
+	return "secret://servers/" + strings.TrimSpace(serverID) + serverStaticSecretSuffix
+}
+
+func EnvironmentSecretRef(serverID, name string) string {
+	return "secret://servers/" + strings.TrimSpace(serverID) + serverEnvSecretPrefix + strings.TrimSpace(name)
+}
+
+func (a *V2App) PutStaticAuthSecret(ctx context.Context, serverID string, value []byte) (string, error) {
+	ref := StaticAuthSecretRef(serverID)
+	if strings.TrimSpace(serverID) == "" || len(value) == 0 {
+		return "", errors.New("server id and static credential are required")
+	}
+	_, err := a.state.PutSecret(ctx, ref, append([]byte(nil), value...))
+	if err == nil && a.product != nil {
+		a.product.log.Redactor().Register(value)
+	}
+	return ref, err
+}
+
+func (a *V2App) PutEnvironmentSecret(ctx context.Context, serverID, name string, value []byte) (string, error) {
+	if strings.TrimSpace(serverID) == "" || strings.TrimSpace(name) == "" || len(value) == 0 {
+		return "", errors.New("server id, environment name, and secret value are required")
+	}
+	ref := EnvironmentSecretRef(serverID, name)
+	_, err := a.state.PutSecret(ctx, ref, append([]byte(nil), value...))
+	if err == nil && a.product != nil {
+		a.product.log.Redactor().Register(value)
+	}
+	return ref, err
+}
+
+func (a *V2App) SaveServers(ctx context.Context, next v2config.ServersConfig) error {
+	if err := v2config.ValidateServers(next); err != nil {
+		return err
+	}
+	if _, err := a.state.SaveServers(ctx, next); err != nil {
+		return err
+	}
+	if err := a.indexing.SetServers(next); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.servers = cloneServersConfig(next)
+	a.mu.Unlock()
+	if a.product != nil {
+		a.product.log.Log("info", "Manager", "Configuration", "server configuration saved", map[string]any{"server_count": len(next.Servers)})
+	}
+	return nil
+}
+
+func (a *V2App) SaveServer(ctx context.Context, entry v2config.ServerEntry) error {
+	serversConfig := a.ServersConfig()
+	replaced := false
+	for i := range serversConfig.Servers {
+		if serversConfig.Servers[i].ID == entry.ID {
+			serversConfig.Servers[i] = cloneServerEntry(entry)
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		serversConfig.Servers = append(serversConfig.Servers, cloneServerEntry(entry))
+	}
+	sort.Slice(serversConfig.Servers, func(i, j int) bool { return serversConfig.Servers[i].ID < serversConfig.Servers[j].ID })
+	return a.SaveServers(ctx, serversConfig)
+}
+
+func (a *V2App) DeleteServer(ctx context.Context, serverID string) error {
+	serverID = strings.TrimSpace(serverID)
+	serversConfig := a.ServersConfig()
+	out := serversConfig.Servers[:0]
+	found := false
+	for _, entry := range serversConfig.Servers {
+		if entry.ID == serverID {
+			found = true
+			continue
+		}
+		out = append(out, entry)
+	}
+	if !found {
+		return nil
+	}
+	serversConfig.Servers = out
+	return a.SaveServers(ctx, serversConfig)
+}
+
 func (a *V2App) KnownServerToolNames(ctx context.Context, serverID string) ([]string, error) {
 	if ctx == nil {
 		ctx = context.Background()
