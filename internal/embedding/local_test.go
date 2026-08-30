@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/v2config"
@@ -49,6 +50,28 @@ func TestLocalProviderDoesNotFallBackToNetworkWhenModelMissing(t *testing.T) {
 	_, err = provider.Embed(context.Background(), []string{"query"})
 	if !errors.Is(err, ErrModelNotInstalled) {
 		t.Fatalf("error = %v, want ErrModelNotInstalled", err)
+	}
+}
+
+func TestLocalServerArgsKeepEmbeddingBatchLimitsCoherent(t *testing.T) {
+	cfg := v2config.DefaultEmbeddingConfig()
+	model, ok := cfg.SelectedModel()
+	if !ok {
+		t.Fatal("default embedding model missing")
+	}
+	args := localServerArgs("model.gguf", model, 43210)
+	want := strconv.Itoa(localEmbeddingBatchTokenLimit)
+	values := make(map[string]string)
+	for i := 0; i+1 < len(args); i++ {
+		switch args[i] {
+		case "--ctx-size", "--batch-size", "--ubatch-size":
+			values[args[i]] = args[i+1]
+		}
+	}
+	for _, flag := range []string{"--ctx-size", "--batch-size", "--ubatch-size"} {
+		if values[flag] != want {
+			t.Fatalf("%s = %q, want %q; args=%v", flag, values[flag], want, args)
+		}
 	}
 }
 
