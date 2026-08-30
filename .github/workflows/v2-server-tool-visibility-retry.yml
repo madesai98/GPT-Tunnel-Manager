@@ -37,20 +37,16 @@ jobs:
           if 'count=3)' not in script:
               raise SystemExit('expected original lifecycle replacement count was not found')
           script = script.replace('count=3)', 'count=2)', 1)
+          bad_editor_tail = '\t\t\t\t}))(gtx)\n'
+          good_editor_tail = '\t\t\t\t}))\n'
+          if script.count(bad_editor_tail) != 1:
+              raise SystemExit(f'expected one erroneous tool editor tail, found {script.count(bad_editor_tail)}')
+          script = script.replace(bad_editor_tail, good_editor_tail, 1)
           Path('/tmp/visibility-patch.sh').write_text(script)
           PY
           bash /tmp/visibility-patch.sh
           python3 - <<'PY'
           from pathlib import Path
-
-          editor = Path('cmd/tunnel-manager/desktop_v2_tool_visibility.go')
-          editor_text = editor.read_text()
-          old_tail = '\t\t\t\t}))(gtx)\n\t\t\t})\n'
-          new_tail = '\t\t\t\t}))\n\t\t\t})\n'
-          if editor_text.count(old_tail) != 1:
-              raise SystemExit(f'expected one erroneous editor layout tail, found {editor_text.count(old_tail)}')
-          editor.write_text(editor_text.replace(old_tail, new_tail, 1))
-
           p = Path('internal/routedlifecycle/service.go')
           text = p.read_text()
           old = '\t\tst.session = connected\n\t\tst.generation++\n'
@@ -59,7 +55,7 @@ jobs:
               raise SystemExit(f'expected one Acquire connection assignment, found {text.count(old)}')
           p.write_text(text.replace(old, new, 1))
           PY
-          gofmt -w internal/routedlifecycle/service.go cmd/tunnel-manager/desktop_v2_tool_visibility.go
+          gofmt -w internal/routedlifecycle/service.go
           git diff --check
           go test ./internal/v2config ./internal/routedlifecycle ./internal/indexing ./internal/app
           go test ./cmd/tunnel-manager
