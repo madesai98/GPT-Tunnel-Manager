@@ -12,6 +12,7 @@ V2 connects to downstream MCPs directly. Per-server Secure MCP Tunnels, per-serv
 - Server modes are Always On, Managed, Manual, and Disabled.
 - Managed servers automatically start for routed work, remain alive while calls/tasks hold use leases, and idle-stop later.
 - Tool discovery is backed by a generation-based semantic catalog rather than by dynamically copying every downstream tool into the upstream surface.
+- Semantic embeddings are produced locally with an app-managed GGUF model and llama.cpp runtime. Tool/index text and search queries are never sent to an online embedding service.
 - Authoritative downstream schemas and MCP ToolAnnotations remain separate from semantic enrichment and Routing Preferences.
 - Live downstream tool-contract drift fails closed and marks routing stale before another unsafe dispatch can occur.
 - Optional local Manager capability protection is enabled by default. Browser-Origin requests are rejected regardless of that setting.
@@ -28,7 +29,7 @@ The desktop application provides:
 - Direct Start, Stop, and Restart controls backed by the same router-native lifecycle service used by MCP execution.
 - Downstream OAuth Connect/Reconnect/Disconnect and static-header/API-key authentication.
 - Environment and secret-environment configuration without requiring users to type internal secret-reference names.
-- Embedding provider configuration, including base URL, model, optional dimensions, and credential storage.
+- Local embedding model selection and download, a built-in default model definition, custom GGUF model definitions, and an optional custom `llama-server` binary path.
 - Index status, refresh, enrichment-batch visibility, Ambiguity Reviews, and atomic commit controls.
 - Routing Profile and Routing Preference management with conflict/review state.
 - Local Manager port and capability-protection controls.
@@ -42,7 +43,7 @@ Minimize and configured close-to-tray behavior remove the native window while th
 
 ## First-time setup
 
-1. Start GPT Tunnel Manager and configure the embedding provider in Settings.
+1. Start GPT Tunnel Manager. In Settings, download the selected local embedding model and managed llama.cpp runtime. The default is BGE Small EN v1.5 Q8_0.
 2. Add downstream Server Entries. No Tunnel ID or ChatGPT Developer Plugin is required for a downstream server.
 3. Use Index to refresh the catalog, complete required enrichment/capability reconciliation through the Manager MCP, and commit the ready generation.
 4. Optionally create Routing Profiles and Routing Preferences.
@@ -70,7 +71,7 @@ The Manager also proxies protocol-required task/resource continuations and legac
 
 ## Authentication boundaries
 
-Manager Tunnel credentials, embedding credentials, downstream static credentials, downstream OAuth credentials/tokens, and local Manager capability protection are separate credential boundaries.
+Manager Tunnel credentials, downstream static credentials, downstream OAuth credentials/tokens, and local Manager capability protection are separate credential boundaries.
 
 Credential values are stored through the platform secret store and are never persisted directly in `manager.json` or `servers.json`.
 
@@ -81,11 +82,17 @@ Credential values are stored through the platform secret store and are never per
 
 Credential-bearing External/Managed HTTP endpoints require HTTPS unless the explicit insecure transport override is enabled for that Server Entry.
 
-## Embeddings and routing data
+## Local embeddings and routing data
 
 Tool Catalog embeddings are derived routing artifacts. Search-query embeddings are memory-only and are not persistently cached by default.
 
-If a remote embedding provider is configured, projected tool text/schema material and search queries used for embeddings are sent to that provider. Raw secret values are not part of the embedding/index projections.
+Embedding inference is local-only. GPT Tunnel Manager does not provide an online embedding provider and does not send projected tool text, schemas, or search queries to OpenAI or another remote embedding API.
+
+The built-in model definition is `BGE Small EN v1.5 Q8_0` (384 dimensions, CLS pooling). Settings can download the pinned GGUF plus the matching pinned llama.cpp CPU runtime. Both downloads are SHA-256 verified before installation. The runtime binds only to loopback and is started lazily when embeddings are needed.
+
+Additional GGUF embedding models can be added in Settings by supplying a model ID, display name, HTTPS download URL, file name, SHA-256 digest, embedding dimensions, and pooling mode. A custom local `llama-server` binary can also be configured instead of the managed runtime.
+
+The selected model identity is part of the deterministic Routing State Hash, including its digest, dimensions, pooling mode, and runtime identity. Changing the selected embedding model invalidates the active semantic generation and query cache so the index embeddings must be rebuilt before routing becomes current again.
 
 Routing Preferences use their own preference revision and take effect without forcing semantic reindexing. A preference is marked for review rather than silently transferred if its referenced tool or routing assumptions change.
 
