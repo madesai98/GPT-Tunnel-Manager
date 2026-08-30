@@ -21,7 +21,10 @@ import (
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/v2config"
 )
 
-const LocalGGUFProtocol = "llama.cpp-v1-embeddings/local"
+const (
+	LocalGGUFProtocol              = "llama.cpp-v1-embeddings/local"
+	localEmbeddingBatchTokenLimit = 2048
+)
 
 type LocalOptions struct {
 	Root   string
@@ -158,6 +161,24 @@ func (p *LocalGGUF) Embed(ctx context.Context, inputs []string) ([][]float32, er
 	return ordered, nil
 }
 
+func localServerArgs(modelPath string, model v2config.EmbeddingModel, port int) []string {
+	batchTokens := strconv.Itoa(localEmbeddingBatchTokenLimit)
+	return []string{
+		"-m", modelPath,
+		"--embedding",
+		"--pooling", model.Pooling,
+		"--embd-normalize", "2",
+		"--ctx-size", batchTokens,
+		"--batch-size", batchTokens,
+		"--ubatch-size", batchTokens,
+		"--host", "127.0.0.1",
+		"--port", strconv.Itoa(port),
+		"--parallel", "1",
+		"--sleep-idle-seconds", "60",
+		"--log-disable",
+	}
+}
+
 func (p *LocalGGUF) ensureServer(ctx context.Context) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -181,8 +202,7 @@ func (p *LocalGGUF) ensureServer(ctx context.Context) (string, error) {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
-	args := []string{"-m", modelPath, "--embedding", "--pooling", p.model.Pooling, "--embd-normalize", "2", "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--parallel", "1", "--sleep-idle-seconds", "60", "--log-disable"}
-	cmd := processutil.ConfigureCommand(exec.Command(binary, args...))
+	cmd := processutil.ConfigureCommand(exec.Command(binary, localServerArgs(modelPath, p.model, port)...))
 	cmd.Dir = filepath.Dir(binary)
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("start local embedding runtime: %w", err)
