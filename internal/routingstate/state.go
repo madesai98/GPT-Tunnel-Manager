@@ -44,17 +44,12 @@ func (t *Tracker) Snapshot(ctx context.Context) (Snapshot, error) {
 	return t.backend.Load(ctx)
 }
 
-// Reconcile compares a freshly computed routing-state hash with the persisted
-// diagnostic state. Call it after every routing-relevant config/secret change
-// and during startup before any generation is considered routable. This makes
-// the deterministic hash, rather than mutation timing, the correctness proof.
 func (t *Tracker) Reconcile(ctx context.Context, currentHash string) (Snapshot, bool, error) {
 	if currentHash == "" {
 		return Snapshot{}, false, errors.New("current routing-state hash is required")
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-
 	state, err := t.backend.Load(ctx)
 	if err != nil {
 		return Snapshot{}, false, err
@@ -70,11 +65,6 @@ func (t *Tracker) Reconcile(ctx context.Context, currentHash string) (Snapshot, 
 	return state, true, nil
 }
 
-// AdvanceRoutingRevision records a routing-relevant runtime event whose
-// correctness proof is stored elsewhere, such as a dirty catalog partition
-// caused by live tools/list drift. It deliberately leaves RoutingStateHash
-// unchanged: revision is diagnostic/order metadata, while the catalog's dirty
-// state and source fingerprints provide the fail-closed proof.
 func (t *Tracker) AdvanceRoutingRevision(ctx context.Context) (Snapshot, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -111,26 +101,31 @@ type RoutingMaterial struct {
 }
 
 type EmbeddingMaterial struct {
-	Provider   v2config.EmbeddingProvider `json:"provider"`
-	BaseURL    string                     `json:"base_url"`
-	Model      string                     `json:"model"`
-	Dimensions *int                       `json:"dimensions,omitempty"`
+	Provider          v2config.EmbeddingProvider `json:"provider"`
+	Model             string                     `json:"model"`
+	ModelSHA256       string                     `json:"model_sha256"`
+	Dimensions        int                        `json:"dimensions"`
+	Pooling           string                     `json:"pooling"`
+	RuntimeRelease    string                     `json:"runtime_release"`
+	RuntimeBinaryPath string                     `json:"runtime_binary_path,omitempty"`
 }
 
-// ConfigMaterial deliberately excludes local Manager access settings, Manager
-// Tunnel credentials, UI/logging settings, query-cache sizing, and the default
-// Routing Profile. Those are operational or preference-overlay state rather
-// than semantic source correctness. Downstream entries are retained in full;
-// later catalog phases may narrow dirty partitions while preserving this global
-// fail-closed hash.
+// ConfigMaterial includes the complete selected local embedding identity. As a
+// result, selecting a different model, quantization, pooling mode, dimension,
+// or runtime invalidates the active semantic generation and forces a rebuild.
 func ConfigMaterial(manager v2config.ManagerConfig, servers v2config.ServersConfig) RoutingMaterial {
 	entries := append([]v2config.ServerEntry(nil), servers.Servers...)
+	embeddingConfig := v2config.EffectiveEmbeddingConfig(manager.Embedding)
+	model, _ := embeddingConfig.SelectedModel()
 	return RoutingMaterial{
 		Embedding: EmbeddingMaterial{
-			Provider:   manager.Embedding.Provider,
-			BaseURL:    manager.Embedding.BaseURL,
-			Model:      manager.Embedding.Model,
-			Dimensions: cloneInt(manager.Embedding.Dimensions),
+			Provider:          embeddingConfig.Provider,
+			Model:             model.ID,
+			ModelSHA256:       model.SHA256,
+			Dimensions:        model.Dimensions,
+			Pooling:           model.Pooling,
+			RuntimeRelease:    embeddingConfig.Runtime.Release,
+			RuntimeBinaryPath: embeddingConfig.Runtime.BinaryPath,
 		},
 		Servers: entries,
 	}
@@ -145,9 +140,6 @@ func ComputeHash(material RoutingMaterial) (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-// FingerprintSecret returns a keyed fingerprint suitable for inclusion in
-// RoutingMaterial. The installation key must be independent of the secret being
-// fingerprinted. Raw secrets and unkeyed hashes must never be persisted.
 func FingerprintSecret(installationKey, secret []byte) (string, error) {
 	if len(installationKey) < 32 {
 		return "", errors.New("installation fingerprint key must be at least 32 bytes")
@@ -157,15 +149,6 @@ func FingerprintSecret(installationKey, secret []byte) (string, error) {
 	return FingerprintAlgorithm + ":" + hex.EncodeToString(mac.Sum(nil)), nil
 }
 
-func cloneInt(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	copy := *value
-	return &copy
-}
-
-// MemoryBackend is useful before the SQLite catalog backend lands and in tests.
 type MemoryBackend struct {
 	mu    sync.Mutex
 	state Snapshot
