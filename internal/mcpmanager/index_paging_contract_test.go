@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/catalog"
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/enrichment"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -51,7 +52,7 @@ func TestIndexGetEnrichmentBatchAdvertisesPagingParameters(t *testing.T) {
 
 func TestResolveIndexGetBatchPagingSupportsStaleSchemaCursor(t *testing.T) {
 	batchLimit, requestOffset := resolveIndexGetBatchPaging(indexGetBatchInput{
-		Kind: catalog.BatchCapabilityReconciliation,
+		Kind:  catalog.BatchCapabilityReconciliation,
 		Limit: 16,
 	})
 	if batchLimit != 1 || requestOffset != 16 {
@@ -77,7 +78,15 @@ func TestResolveIndexGetBatchPagingSupportsStaleSchemaCursor(t *testing.T) {
 }
 
 func TestCapabilityBatchInjectsStaleSchemaRecoveryInstruction(t *testing.T) {
-	batch := capabilityProtocolTestBatch(t)
+	batch := catalog.EnrichmentBatch{
+		ID:                 "batch:compat",
+		GenerationID:       "gen",
+		Kind:               catalog.BatchCapabilityReconciliation,
+		BatchKey:           "global",
+		Required:           true,
+		RequestFingerprint: "sha256:compat",
+		RequestJSON:        json.RawMessage(`{"protocol":"` + enrichment.CapabilityProtocolVersion + `","items":[{"tool":{"member_key":"srv/tool","server_id":"srv","tool_name":"tool","contract":{"name":"tool"}},"enrichment":{"purpose":"test"}}]}`),
+	}
 	projected, err := projectIndexBatchPage(batch, 0, 1)
 	if err != nil {
 		t.Fatal(err)
