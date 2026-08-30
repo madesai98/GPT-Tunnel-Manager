@@ -36,6 +36,8 @@ func TestFormatV2IdleRemaining(t *testing.T) {
 	}
 }
 
+// Keep the v2 server list on the compact pre-v2 interaction pattern rather
+// than regressing to stacked text actions again.
 func TestV2ServerCardsUseCompactRuntimeControls(t *testing.T) {
 	data, err := os.ReadFile("desktop_v2_pages.go")
 	if err != nil {
