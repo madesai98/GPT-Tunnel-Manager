@@ -341,25 +341,12 @@ func (u *v2DesktopUI) layout(gtx layout.Context) layout.Dimensions {
 }
 
 func (u *v2DesktopUI) sidebar(gtx layout.Context) layout.Dimensions {
-	for u.serversNav.Clicked(gtx) {
-		u.page = "servers"
-	}
-	for u.indexNav.Clicked(gtx) {
-		u.page = "index"
-	}
-	for u.routingNav.Clicked(gtx) {
-		u.page = "routing"
-	}
-	for u.settingsNav.Clicked(gtx) {
-		u.page = "settings"
-		u.loadSettings()
-	}
-	for u.logsNav.Clicked(gtx) {
-		u.page = "logs"
-	}
-	for u.exit.Clicked(gtx) {
-		u.requestExit()
-	}
+	for u.serversNav.Clicked(gtx) { u.page = "servers" }
+	for u.indexNav.Clicked(gtx) { u.page = "index" }
+	for u.routingNav.Clicked(gtx) { u.page = "routing" }
+	for u.settingsNav.Clicked(gtx) { u.page = "settings"; u.loadSettings() }
+	for u.logsNav.Clicked(gtx) { u.page = "logs" }
+	for u.exit.Clicked(gtx) { u.requestExit() }
 
 	width := gtx.Dp(unit.Dp(220))
 	gtx.Constraints.Min.X, gtx.Constraints.Max.X = width, width
@@ -387,19 +374,12 @@ func (u *v2DesktopUI) sidebar(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(compactCard(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 					layout.Rigid(faintCaption(u.th, "MANAGER MCP")),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, pill(u.th, statusText, statusBg, statusFg))
-					}),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, mutedCaption(u.th, fmt.Sprintf("%d servers", len(u.core.Entries()))))
-					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, pill(u.th, statusText, statusBg, statusFg)) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, mutedCaption(u.th, fmt.Sprintf("%d servers", len(u.core.Entries())))) }),
 				)
 			})),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(10)}.Layout(gtx) }),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				gtx.Constraints.Min.X = gtx.Constraints.Max.X
-				return dangerButton(u.th, &u.exit, "Exit Manager")(gtx)
-			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { gtx.Constraints.Min.X = gtx.Constraints.Max.X; return dangerButton(u.th, &u.exit, "Exit Manager")(gtx) }),
 		)
 	})(gtx)
 }
@@ -413,20 +393,14 @@ func (u *v2DesktopUI) mainArea(gtx layout.Context) layout.Dimensions {
 	}
 	title, subtitle := "Servers", "Manage downstream MCP runtimes through the router-native lifecycle."
 	switch u.page {
-	case "index":
-		title, subtitle = "Index", "Build and promote the routing catalog for the current routing state."
-	case "routing":
-		title, subtitle = "Routing", "Manage routing profiles, preference revisions, and review state."
-	case "settings":
-		title, subtitle = "Settings", "Configure local Manager protection, tunnel exposure, embeddings, and native behavior."
-	case "logs":
-		title, subtitle = "Logs", "Filter, inspect, clear, and export structured v2 runtime logs."
+	case "index": title, subtitle = "Index", "Build and promote the routing catalog for the current routing state."
+	case "routing": title, subtitle = "Routing", "Manage routing profiles, preference revisions, and review state."
+	case "settings": title, subtitle = "Settings", "Configure local Manager protection, tunnel exposure, embeddings, and native behavior."
+	case "logs": title, subtitle = "Logs", "Filter, inspect, clear, and export structured v2 runtime logs."
 	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(pageTitle(u.th, title)),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(18)}.Layout(gtx, mutedCaption(u.th, subtitle))
-		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(18)}.Layout(gtx, mutedCaption(u.th, subtitle)) }),
 		layout.Flexed(1, u.body),
 		layout.Rigid(u.footer),
 	)
@@ -449,15 +423,11 @@ func (u *v2DesktopUI) exitDialog(gtx layout.Context) layout.Dimensions {
 	}
 	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		maxWidth := gtx.Dp(unit.Dp(520))
-		if gtx.Constraints.Max.X > maxWidth {
-			gtx.Constraints.Max.X = maxWidth
-		}
+		if gtx.Constraints.Max.X > maxWidth { gtx.Constraints.Max.X = maxWidth }
 		return card(func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				layout.Rigid(sectionTitle(u.th, "Exit GPT Tunnel Manager?")),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layout.Inset{Top: unit.Dp(9), Bottom: unit.Dp(9)}.Layout(gtx, mutedCaption(u.th, "This stops the Manager MCP, its one optional secure tunnel, and any downstream MCP runtimes owned by the router."))
-				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(9), Bottom: unit.Dp(9)}.Layout(gtx, mutedCaption(u.th, "This stops the Manager MCP, its one optional secure tunnel, and any downstream MCP runtimes owned by the router.")) }),
 				layout.Rigid(material.CheckBox(u.th, &u.dontAskAgain, "Don't ask again").Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return layout.Inset{Top: unit.Dp(14)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -475,21 +445,16 @@ func (u *v2DesktopUI) exitDialog(gtx layout.Context) layout.Dimensions {
 
 func (u *v2DesktopUI) body(gtx layout.Context) layout.Dimensions {
 	switch u.page {
-	case "index":
-		return u.indexPage(gtx)
-	case "routing":
-		return u.routingPage(gtx)
-	case "settings":
-		return u.settingsPage(gtx)
-	case "logs":
-		return u.logsPage(gtx)
-	default:
-		return u.serversPage(gtx)
+	case "index": return u.indexPage(gtx)
+	case "routing": return u.routingPage(gtx)
+	case "settings": return u.settingsPage(gtx)
+	case "logs": return u.logsPage(gtx)
+	default: return u.serversPage(gtx)
 	}
 }
 
 func (u *v2DesktopUI) serversPage(gtx layout.Context) layout.Dimensions { return v2ServersPage(u, gtx) }
-func (u *v2DesktopUI) indexPage(gtx layout.Context) layout.Dimensions   { return v2IndexPage(u, gtx) }
+func (u *v2DesktopUI) indexPage(gtx layout.Context) layout.Dimensions { return v2IndexPage(u, gtx) }
 func (u *v2DesktopUI) routingPage(gtx layout.Context) layout.Dimensions { return v2RoutingPage(u, gtx) }
 
 func editorSurface(th *material.Theme, editor *widget.Editor, hint string) layout.Widget {
@@ -508,53 +473,39 @@ func (u *v2DesktopUI) settingsPage(gtx layout.Context) layout.Dimensions {
 			cfg.LocalManager.AccessProtectionEnabled = u.protection.Value
 			cfg.ManagerTunnel.Enabled = u.managerTunnel.Value
 			cfg.ManagerTunnel.TunnelID = strings.TrimSpace(u.managerTunnelID.Text())
-			if err := u.core.SaveManager(context.Background(), cfg); err != nil {
-				return err
-			}
+			if err := u.core.SaveManager(context.Background(), cfg); err != nil { return err }
 			embed := cfg.Embedding
 			embed.BaseURL = strings.TrimSpace(u.embeddingBase.Text())
 			embed.Model = strings.TrimSpace(u.embeddingModel.Text())
 			var key []byte
-			if strings.TrimSpace(u.embeddingKey.Text()) != "" {
-				key = []byte(u.embeddingKey.Text())
-			}
-			if err := u.core.SetEmbedding(context.Background(), embed, key); err != nil {
-				return err
-			}
+			if strings.TrimSpace(u.embeddingKey.Text()) != "" { key = []byte(u.embeddingKey.Text()) }
+			if err := u.core.SetEmbedding(context.Background(), embed, key); err != nil { return err }
 			u.embeddingKey.SetText("")
 			return nil
 		})
 	}
 	credentialStatus := "not configured"
-	if u.core.EmbeddingCredentialConfigured(context.Background()) {
-		credentialStatus = "configured"
-	}
+	if u.core.EmbeddingCredentialConfigured(context.Background()) { credentialStatus = "configured" }
 	u.settingsScroll.Axis = layout.Vertical
 	return u.settingsScroll.Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
 		return card(func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-				layout.Rigid(sectionTitle(u.th, "Local Manager")),
-				layout.Rigid(material.CheckBox(u.th, &u.protection, "Require local Manager capability").Layout),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(16)}.Layout(gtx) }),
-				layout.Rigid(sectionTitle(u.th, "Manager Secure MCP Tunnel")),
-				layout.Rigid(material.CheckBox(u.th, &u.managerTunnel, "Enable Manager tunnel").Layout),
-				layout.Rigid(editorSurface(u.th, &u.managerTunnelID, "Tunnel ID")),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(16)}.Layout(gtx) }),
-				layout.Rigid(sectionTitle(u.th, "Embeddings")),
-				layout.Rigid(editorSurface(u.th, &u.embeddingBase, "OpenAI-compatible base URL")),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(7)}.Layout(gtx) }),
-				layout.Rigid(editorSurface(u.th, &u.embeddingModel, "Embedding model")),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &u.embeddingKey, "API key (leave blank to keep current)"))
-				}),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layout.Inset{Top: unit.Dp(5)}.Layout(gtx, faintCaption(u.th, "Credential: "+credentialStatus))
-				}),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layout.Inset{Top: unit.Dp(14)}.Layout(gtx, primaryButton(u.th, &u.saveSettings, "Save Manager & Embedding Settings"))
-				}),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return v2ProductSettingsSection(u, gtx) }),
-			)
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(sectionTitle(u.th, "Local Manager")),
+			layout.Rigid(material.CheckBox(u.th, &u.protection, "Require local Manager capability").Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(16)}.Layout(gtx) }),
+			layout.Rigid(sectionTitle(u.th, "Manager Secure MCP Tunnel")),
+			layout.Rigid(material.CheckBox(u.th, &u.managerTunnel, "Enable Manager tunnel").Layout),
+			layout.Rigid(editorSurface(u.th, &u.managerTunnelID, "Tunnel ID")),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(16)}.Layout(gtx) }),
+			layout.Rigid(sectionTitle(u.th, "Embeddings")),
+			layout.Rigid(editorSurface(u.th, &u.embeddingBase, "OpenAI-compatible base URL")),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(7)}.Layout(gtx) }),
+			layout.Rigid(editorSurface(u.th, &u.embeddingModel, "Embedding model")),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &u.embeddingKey, "API key (leave blank to keep current)")) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(5)}.Layout(gtx, faintCaption(u.th, "Credential: "+credentialStatus)) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(14)}.Layout(gtx, primaryButton(u.th, &u.saveSettings, "Save Manager & Embedding Settings")) }),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return v2ProductSettingsSection(u, gtx) }),
+		)
 		})(gtx)
 	})
 }
@@ -565,12 +516,8 @@ func (u *v2DesktopUI) footer(gtx layout.Context) layout.Dimensions {
 	u.mu.RLock()
 	message, busy := u.message, u.busy
 	u.mu.RUnlock()
-	if message == "" {
-		message = "Manager MCP: " + u.core.ManagerSnapshot().MCPURL
-	}
-	if busy {
-		message = "Working… " + message
-	}
+	if message == "" { message = "Manager MCP: " + u.core.ManagerSnapshot().MCPURL }
+	if busy { message = "Working… " + message }
 	return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, faintCaption(u.th, message))
 }
 
@@ -590,19 +537,12 @@ func (u *v2DesktopUI) trayReady() {
 		defer ticker.Stop()
 		for {
 			select {
-			case <-u.trayStop:
-				return
-			case <-open.ClickedCh:
-				u.showWindow()
-			case <-exit.ClickedCh:
-				u.requestExit()
+			case <-u.trayStop: return
+			case <-open.ClickedCh: u.showWindow()
+			case <-exit.ClickedCh: u.requestExit()
 			case <-ticker.C:
 				running := 0
-				for _, snapshot := range u.core.Snapshots() {
-					if snapshot.Running {
-						running++
-					}
-				}
+				for _, snapshot := range u.core.Snapshots() { if snapshot.Running { running++ } }
 				tunnel := u.core.ManagerTunnelStatus()
 				status.SetTitle(fmt.Sprintf("Status: Manager running · tunnel %s · %d/%d servers running", tunnel.State, running, len(u.core.Entries())))
 			}
