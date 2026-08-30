@@ -5,8 +5,9 @@ import "time"
 const (
 	SchemaVersion                   = 2
 	ManagerRuntimeCredentialRef     = "secret://openai/runtime/default"
-	EmbeddingCredentialRef          = "secret://embedding/openai-compatible/default"
 	LocalManagerCapabilitySecretRef = "secret://manager/local-capability/default"
+	DefaultEmbeddingModelID         = "bge-small-en-v1.5-q8_0"
+	DefaultLlamaCppRelease          = "b10621"
 )
 
 type ManagerConfig struct {
@@ -36,14 +37,77 @@ type ManagerTunnelConfig struct {
 
 type EmbeddingProvider string
 
-const EmbeddingProviderOpenAICompatible EmbeddingProvider = "openai_compatible"
+const (
+	EmbeddingProviderLocalGGUF        EmbeddingProvider = "local_gguf"
+	EmbeddingProviderOpenAICompatible EmbeddingProvider = "openai_compatible" // legacy v2 config migration only
+)
+
+type EmbeddingRuntimeConfig struct {
+	Release    string `json:"release"`
+	BinaryPath string `json:"binary_path,omitempty"`
+}
+
+type EmbeddingModel struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DownloadURL string `json:"download_url"`
+	FileName    string `json:"file_name"`
+	SHA256      string `json:"sha256,omitempty"`
+	Dimensions  int    `json:"dimensions"`
+	Pooling     string `json:"pooling"`
+}
 
 type EmbeddingConfig struct {
-	Provider      EmbeddingProvider `json:"provider"`
-	BaseURL       string            `json:"base_url"`
-	Model         string            `json:"model"`
-	Dimensions    *int              `json:"dimensions,omitempty"`
-	CredentialRef string            `json:"credential_ref"`
+	Provider EmbeddingProvider      `json:"provider"`
+	Model    string                 `json:"model"`
+	Runtime  EmbeddingRuntimeConfig `json:"runtime"`
+	Models   []EmbeddingModel       `json:"models"`
+
+	// Legacy fields are accepted only so existing v2 installations can be
+	// upgraded in place from the removed OpenAI-compatible embedding backend.
+	BaseURL       string `json:"base_url,omitempty"`
+	Dimensions    *int   `json:"dimensions,omitempty"`
+	CredentialRef string `json:"credential_ref,omitempty"`
+}
+
+func DefaultEmbeddingModels() []EmbeddingModel {
+	return []EmbeddingModel{{
+		ID:          DefaultEmbeddingModelID,
+		Name:        "BGE Small EN v1.5 Q8_0",
+		DownloadURL: "https://huggingface.co/ggml-org/bge-small-en-v1.5-Q8_0-GGUF/resolve/main/bge-small-en-v1.5-q8_0.gguf?download=true",
+		FileName:    "bge-small-en-v1.5-q8_0.gguf",
+		SHA256:      "f046db1dc724cf4f6f0a0c5917e922823b73eb1d27b8f9a9c2797f7866974804",
+		Dimensions:  384,
+		Pooling:     "cls",
+	}}
+}
+
+func DefaultEmbeddingConfig() EmbeddingConfig {
+	return EmbeddingConfig{
+		Provider: EmbeddingProviderLocalGGUF,
+		Model:    DefaultEmbeddingModelID,
+		Runtime:  EmbeddingRuntimeConfig{Release: DefaultLlamaCppRelease},
+		Models:   DefaultEmbeddingModels(),
+	}
+}
+
+// EffectiveEmbeddingConfig maps the released v2 OpenAI-compatible setting to
+// the local default without ever constructing an online embedding client. The
+// next manager save persists the local configuration.
+func EffectiveEmbeddingConfig(c EmbeddingConfig) EmbeddingConfig {
+	if c.Provider == EmbeddingProviderOpenAICompatible || c.Provider == "" {
+		return DefaultEmbeddingConfig()
+	}
+	return c
+}
+
+func (c EmbeddingConfig) SelectedModel() (EmbeddingModel, bool) {
+	for _, model := range c.Models {
+		if model.ID == c.Model {
+			return model, true
+		}
+	}
+	return EmbeddingModel{}, false
 }
 
 type RoutingConfig struct {
@@ -212,13 +276,8 @@ func DefaultManagerConfig(port int) ManagerConfig {
 			AccessProtectionEnabled: true,
 		},
 		ManagerTunnel: ManagerTunnelConfig{RuntimeCredentialRef: ManagerRuntimeCredentialRef},
-		Embedding: EmbeddingConfig{
-			Provider:      EmbeddingProviderOpenAICompatible,
-			BaseURL:       "https://api.openai.com/v1",
-			Model:         "text-embedding-3-small",
-			CredentialRef: EmbeddingCredentialRef,
-		},
-		Index: IndexConfig{QueryEmbeddingCacheEntries: 256},
+		Embedding:     DefaultEmbeddingConfig(),
+		Index:         IndexConfig{QueryEmbeddingCacheEntries: 256},
 		General: GeneralConfig{
 			MinimizeToTray: true,
 			CloseBehavior:  "minimize",
