@@ -19,6 +19,7 @@ func TestV2DesktopRestoresFramelessChrome(t *testing.T) {
 		"case gioapp.ConfigEvent:",
 		"u.deco.Maximized = event.Config.Mode == gioapp.Maximized",
 		"requestedHidden := u.windowHidden",
+		"requestedHidden := u.windowHidden",
 		"layout.Rigid(u.v2TitleBar)",
 	} {
 		if !strings.Contains(gioText, marker) {
