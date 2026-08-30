@@ -40,6 +40,7 @@ type v2DesktopUI struct {
 	core *coreapp.V2App
 	win  *gioapp.Window
 	th   *material.Theme
+	deco widget.Decorations
 
 	page           string
 	list           widget.List
@@ -177,7 +178,9 @@ func (u *v2DesktopUI) runWindow() error {
 		gioapp.Title("GPT Tunnel Manager"),
 		gioapp.Size(unit.Dp(1180), unit.Dp(800)),
 		gioapp.MinSize(unit.Dp(880), unit.Dp(600)),
+		gioapp.Decorated(false),
 	)
+	u.deco = widget.Decorations{}
 	u.mu.Lock()
 	u.win = win
 	u.mu.Unlock()
@@ -210,11 +213,14 @@ func (u *v2DesktopUI) runWindow() error {
 	var ops op.Ops
 	for {
 		switch event := win.Event().(type) {
+		case gioapp.ConfigEvent:
+			u.deco.Maximized = event.Config.Mode == gioapp.Maximized
 		case gioapp.DestroyEvent:
 			if event.Err != nil {
 				return event.Err
 			}
 			u.mu.RLock()
+			requestedHidden := u.windowHidden
 			exiting := u.exiting
 			u.mu.RUnlock()
 			if exiting {
@@ -224,6 +230,9 @@ func (u *v2DesktopUI) runWindow() error {
 			case <-u.core.Done():
 				return nil
 			default:
+			}
+			if requestedHidden {
+				return nil
 			}
 			cfg := u.core.ManagerConfig()
 			if cfg.General.CloseBehavior == "minimize" || cfg.General.MinimizeToTray {
@@ -332,10 +341,15 @@ func (u *v2DesktopUI) setMessage(message string) {
 
 func (u *v2DesktopUI) layout(gtx layout.Context) layout.Dimensions {
 	paint.Fill(gtx.Ops, uiCanvas)
-	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
-		layout.Rigid(u.sidebar),
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(u.v2TitleBar),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Top: unit.Dp(24), Bottom: unit.Dp(18), Left: unit.Dp(26), Right: unit.Dp(26)}.Layout(gtx, u.mainArea)
+			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+				layout.Rigid(u.sidebar),
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Top: unit.Dp(24), Bottom: unit.Dp(18), Left: unit.Dp(26), Right: unit.Dp(26)}.Layout(gtx, u.mainArea)
+				}),
+			)
 		}),
 	)
 }
