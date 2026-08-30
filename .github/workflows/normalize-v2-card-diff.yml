@@ -1,0 +1,57 @@
+name: Normalize v2 server card diff
+
+on:
+  push:
+    branches:
+      - ui/v2-server-card-polish
+    paths:
+      - .github/workflows/normalize-v2-card-diff.yml
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ui/v2-server-card-polish
+          fetch-depth: 0
+      - name: Keep unrelated Gio formatting unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout origin/main -- cmd/tunnel-manager/desktop_v2_gio.go
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("cmd/tunnel-manager/desktop_v2_gio.go")
+          text = path.read_text()
+          old = '''type v2ServerActions struct {
+          \tstart   widget.Clickable
+          \tstop    widget.Clickable
+          \trestart widget.Clickable
+          \toauth   widget.Clickable
+          \tremove  widget.Clickable
+          }
+          '''
+          new = '''type v2ServerActions struct {
+          \tstart   widget.Clickable
+          \tstop    widget.Clickable
+          \trestart widget.Clickable
+          \toauth   widget.Clickable
+          \tedit    widget.Clickable
+          \tremove  widget.Clickable
+          \ttoggle  widget.Clickable
+          }
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one v2ServerActions block, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git rm .github/workflows/normalize-v2-card-diff.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cmd/tunnel-manager/desktop_v2_gio.go
+          git commit -m "Keep server card change focused"
+          git push origin HEAD:ui/v2-server-card-polish
