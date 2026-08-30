@@ -65,12 +65,33 @@ func (u *v2DesktopUI) perform(action system.Action) {
 	}
 }
 
+func (u *v2DesktopUI) hideToTray() {
+	u.mu.Lock()
+	if u.windowHidden || u.exiting || u.win == nil {
+		u.mu.Unlock()
+		return
+	}
+	win := u.win
+	u.windowHidden = true
+	u.mu.Unlock()
+	win.Perform(system.ActionClose)
+}
+
+func (u *v2DesktopUI) requestClose() {
+	cfg := u.core.ManagerConfig()
+	if cfg.General.CloseBehavior == "minimize" || cfg.General.MinimizeToTray {
+		u.hideToTray()
+		return
+	}
+	u.requestExit()
+}
+
 func (u *v2DesktopUI) v2TitleBar(gtx layout.Context) layout.Dimensions {
 	for v2ChromeClose.Clicked(gtx) {
-		u.perform(system.ActionClose)
+		u.requestClose()
 	}
 	for v2ChromeMinimize.Clicked(gtx) {
-		u.perform(system.ActionMinimize)
+		u.hideToTray()
 	}
 	for v2ChromeMaximize.Clicked(gtx) {
 		if u.deco.Maximized {
@@ -112,7 +133,7 @@ func (u *v2DesktopUI) v2TitleBar(gtx layout.Context) layout.Dimensions {
 	call := record.Stop()
 	op.Defer(gtx.Ops, call)
 
-	// Keep the custom chrome as an overlay so the application content still
-	// starts at the physical top edge of the frameless window, matching v1.
+	// Match the final v1 window chrome: an invisible draggable overlay that
+	// does not consume content height, with the controls at the upper-right.
 	return layout.Dimensions{}
 }

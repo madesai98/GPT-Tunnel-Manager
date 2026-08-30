@@ -18,6 +18,7 @@ func TestV2DesktopRestoresFramelessChrome(t *testing.T) {
 		"gioapp.Decorated(false)",
 		"case gioapp.ConfigEvent:",
 		"u.deco.Maximized = event.Config.Mode == gioapp.Maximized",
+		"requestedHidden := u.windowHidden",
 		"layout.Rigid(u.v2TitleBar)",
 	} {
 		if !strings.Contains(gioText, marker) {
@@ -32,7 +33,8 @@ func TestV2DesktopRestoresFramelessChrome(t *testing.T) {
 	chromeText := string(chromeSource)
 	for _, marker := range []string{
 		"system.ActionInputOp(system.ActionMove)",
-		"system.ActionMinimize",
+		"u.requestClose()",
+		"u.hideToTray()",
 		"system.ActionMaximize",
 		"system.ActionUnmaximize",
 		"R: 255, G: 95, B: 87",
