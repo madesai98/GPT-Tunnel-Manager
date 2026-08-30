@@ -1,12 +1,28 @@
 # GPT Tunnel Manager v2 Implementation Status
 
-Date: 2026-08-29  
-Release line: **v2.0.0**  
-Implementation status: **Complete — Phases 0–13 and the v2 Definition of Done are satisfied**
+Date: 2026-08-30  
+Current released line before this change: **v2.0.6**  
+Implementation status: **Complete — Phases 0–13 and the v2 Definition of Done are satisfied; local-only embedding hardening is implemented on `fix/local-embedding-models` pending final CI/merge**
 
 The canonical product/architecture contract is `docs/V2_IMPLEMENTATION_PLAN.md`. `CONTEXT.md` and ADR 0009 onward define the accepted v2 terminology and architectural decisions.
 
 The historical pre-v2 baseline was `main` commit `08366ffbd299177870c10a3446ab9e4dcd35a18e` (`Release v1.0.32`). V2 was implemented on `feature/v2-mcp-router` as a clean architecture/configuration break from that baseline.
+
+## Post-v2 local embedding hardening
+
+The semantic embedding path is now local-only. The removed OpenAI-compatible embedding backend is replaced by a GGUF embedding provider backed by an app-managed llama.cpp runtime.
+
+Current behavior:
+
+- fresh installs select `BGE Small EN v1.5 Q8_0` by default (384 dimensions, CLS pooling);
+- Settings can download the selected model plus the pinned llama.cpp CPU runtime;
+- model/runtime downloads are SHA-256 verified before installation;
+- llama.cpp listens only on loopback and is started lazily for embedding work;
+- additional GGUF embedding model definitions can be added in Settings;
+- a custom local `llama-server` binary path may be configured instead of the managed runtime;
+- released `openai_compatible` v2 configuration remains readable only as migration input and resolves to the local default for inference; no online embedding provider is constructed;
+- the selected model digest, dimensions, pooling, and runtime identity are part of Routing State Hash material, so changing the model invalidates the active semantic generation and requires embedding/index rebuild before routing is current again;
+- the former OpenAI embedding implementation and tests have been removed.
 
 ## Release readiness
 
@@ -25,7 +41,7 @@ The substantive Phase 13 hardening checkpoint is commit `9d4c60f11ce87ee4f60b667
 
 The Phase 13 completion/status checkpoint `34c4ea28df0de5b65dfde819e8dc902565574cb3` also passed CI in run `33278757543`.
 
-Release metadata and public release notes are configured for `v2.0.0`. The `Release` workflow re-verifies the repository before packaging and publishing six native binaries, source archives, checksums, and changelog artifacts. The `Release Page` workflow applies the curated v2 release notes after a successful release.
+Release metadata and public release notes are configured for the current v2 release line. The `Release` workflow re-verifies the repository before packaging and publishing six native binaries, source archives, checksums, and changelog artifacts. The `Release Page` workflow applies curated release notes after a successful release.
 
 ## Implemented v2 architecture
 
@@ -42,6 +58,7 @@ V2 provides:
 - accurate `server_busy` mutation protection with `active_call_count`;
 - manager-owned activity timestamps rather than tunnel telemetry;
 - a persistent generation-based SQLite Tool Catalog and semantic index;
+- local-only GGUF embeddings through llama.cpp, with verified managed model/runtime downloads and no online embedding inference;
 - deterministic Routing State Hash freshness plus atomic generation promotion;
 - content-addressed lexical/vector/enrichment artifacts and incremental invalidation;
 - semantic-neighborhood membership invalidation;
@@ -86,7 +103,7 @@ Complete. The pure-Go SQLite catalog provides authoritative contracts, routing-s
 
 ### Phase 5 — embedding and deterministic retrieval substrate
 
-Complete. OpenAI-compatible embeddings, memory-only query cache, lexical/BM25 retrieval, exact cosine vectors, deterministic projections, and persistent content-addressed retrieval artifacts were implemented and benchmarked at 1k/5k/10k tools.
+Complete. Local GGUF embeddings backed by llama.cpp, memory-only query cache, lexical/BM25 retrieval, exact cosine vectors, deterministic projections, and persistent content-addressed retrieval artifacts are implemented. The original online embedding implementation has been retired; the retrieval substrate and benchmark gates remain unchanged.
 
 ### Phase 6 — semantic enrichment, reconciliation, and preferences
 
@@ -110,7 +127,7 @@ Complete. One protocol-aware `/mcp` endpoint exposes the fixed 19-tool contract 
 
 ### Phase 11 — native desktop migration
 
-Complete. The executable bootstrap and Gio UI are v2-native. Normal users can manage Server Entries, auth, embeddings, indexing, reviews, Routing Profiles/Preferences, Manager settings/tunnel, logs, tray behavior, tunnel-client management, and self-update without editing JSON or secret-reference names.
+Complete. The executable bootstrap and Gio UI are v2-native. Normal users can manage Server Entries, auth, local embedding models, indexing, reviews, Routing Profiles/Preferences, Manager settings/tunnel, logs, tray behavior, tunnel-client management, and self-update without editing JSON or secret-reference names.
 
 ### Phase 12 — remove old topology
 
@@ -141,4 +158,4 @@ The obsolete packaged `lifecycle-skill/` directory is not part of v2 releases an
 
 ## Definition of Done
 
-The v2 Definition of Done is satisfied: a fresh v2 user can configure and route downstream MCPs, authenticate, build/commit the semantic index, resolve or defer ambiguity, apply routing preferences, discover exact tools, execute through the correct permission class, use Managed lifecycle and protocol continuations, optionally expose the single Manager MCP remotely, and manage the product through the native UI without any per-server tunnel/plugin/lifecycle choreography.
+The v2 Definition of Done is satisfied: a fresh v2 user can configure and route downstream MCPs, authenticate, download/select a local embedding model, build/commit the semantic index, resolve or defer ambiguity, apply routing preferences, discover exact tools, execute through the correct permission class, use Managed lifecycle and protocol continuations, optionally expose the single Manager MCP remotely, and manage the product through the native UI without any per-server tunnel/plugin/lifecycle choreography.
