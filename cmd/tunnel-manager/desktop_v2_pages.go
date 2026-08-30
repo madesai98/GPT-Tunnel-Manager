@@ -11,6 +11,7 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget/material"
 
+	"github.com/madesai98/GPT-Tunnel-Manager/internal/routedlifecycle"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/v2config"
 )
 
@@ -19,11 +20,10 @@ func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 		return v2ServerEditorPage(u, gtx)
 	}
 	entries := u.core.Entries()
-	snapshots := make(map[string]bool)
-	active := make(map[string]int)
+	manager := u.core.ManagerConfig()
+	snapshots := make(map[string]routedlifecycle.Snapshot)
 	for _, snapshot := range u.core.Snapshots() {
-		snapshots[snapshot.ServerID] = snapshot.Running
-		active[snapshot.ServerID] = snapshot.ActiveCallCount
+		snapshots[snapshot.ServerID] = snapshot
 	}
 
 	body := func(gtx layout.Context) layout.Dimensions {
@@ -36,6 +36,7 @@ func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 		u.list.List.Position.Count = len(entries)
 		return material.List(u.th, &u.list).Layout(gtx, len(entries), func(gtx layout.Context, index int) layout.Dimensions {
 			entry := entries[index]
+			snapshot := snapshots[entry.ID]
 			actions := u.serverRows[entry.ID]
 			if actions == nil {
 				actions = &v2ServerActions{}
@@ -68,60 +69,116 @@ func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 					})
 				}
 			}
+			for actions.edit.Clicked(gtx) {
+				openExistingV2ServerEditor(entry)
+				u.invalidate()
+			}
 			for actions.remove.Clicked(gtx) {
 				id := entry.ID
 				u.async("removing "+entry.Name, func() error { return u.core.DeleteServer(context.Background(), id) })
 			}
-			running := snapshots[entry.ID]
+			for actions.toggle.Clicked(gtx) {
+				updated := entry
+				updated.Mode = v2ToggledServerMode(entry.Mode)
+				action := "enabling " + entry.Name
+				if updated.Mode == v2config.ModeDisabled {
+					action = "disabling " + entry.Name
+				}
+				u.async(action, func() error { return u.core.SaveServer(context.Background(), updated) })
+			}
+
+			enabled := entry.Mode != v2config.ModeDisabled
 			state := "STOPPED"
-			bg, fg := uiSurfaceRaised, uiMuted
-			if running {
-				state, bg, fg = "RUNNING", uiSuccessSoft, uiSuccess
+			stateBG, stateFG := uiSurfaceRaised, uiMuted
+			if snapshot.Running {
+				state, stateBG, stateFG = "RUNNING", uiSuccessSoft, uiSuccess
 			}
-			if entry.Mode == v2config.ModeDisabled {
-				state, bg, fg = "DISABLED", uiWarningSoft, uiWarning
+			if !enabled {
+				state, stateBG, stateFG = "DISABLED", uiWarningSoft, uiWarning
 			}
+
+			modeText := strings.ToUpper(string(entry.Mode))
+			modeBG, modeFG := uiAccentSoft, uiAccent
+			switch entry.Mode {
+			case v2config.ModeAlwaysOn:
+				modeText, modeBG, modeFG = "ALWAYS ON", uiSuccessSoft, uiSuccess
+			case v2config.ModeManual:
+				modeText, modeBG, modeFG = "MANUAL", uiSurfaceRaised, uiMuted
+			case v2config.ModeDisabled:
+				modeText, modeBG, modeFG = "DISABLED", uiWarningSoft, uiWarning
+			}
+
+			showStart := enabled && !snapshot.Running
+			showStop := enabled && snapshot.Running && entry.Mode != v2config.ModeAlwaysOn
+			showRestart := enabled && snapshot.Running
 			oauth := u.core.OAuthStatus(context.Background(), entry.ID)
-			return layout.Inset{Bottom: unit.Dp(10)}.Layout(gtx, card(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			idleTimeout := manager.ManagedDefaults.IdleTimeoutSeconds
+			if entry.Runtime.IdleTimeoutSeconds != nil {
+				idleTimeout = *entry.Runtime.IdleTimeoutSeconds
+			}
+			showIdle := enabled && entry.Mode == v2config.ModeManaged && snapshot.Running && snapshot.ActiveCallCount == 0
+
+			return layout.Inset{Bottom: unit.Dp(10)}.Layout(gtx, compactCard(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions { return sectionTitle(u.th, entry.Name)(gtx) }),
-							layout.Rigid(pill(u.th, strings.ToUpper(string(entry.Mode)), uiAccentSoft, uiText)),
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
-							layout.Rigid(pill(u.th, state, bg, fg)),
-						)
-					}),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, mutedCaption(u.th, fmt.Sprintf("%s · active leases %d · %s", entry.Transport.Type, active[entry.ID], entry.ID)))
-					}),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							children := []layout.FlexChild{
-								layout.Rigid(secondaryButton(u.th, &actions.start, "Start")),
-								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
-								layout.Rigid(secondaryButton(u.th, &actions.stop, "Stop")),
-								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
-								layout.Rigid(secondaryButton(u.th, &actions.restart, "Restart")),
-							}
-							if oauth.Configured {
-								label := "Connect OAuth"
-								if oauth.Connected {
-									label = "Reconnect OAuth"
+						return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								children := []layout.FlexChild{
+									layout.Rigid(sectionTitle(u.th, entry.Name)),
+									layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(12)}.Layout(gtx) }),
+								}
+								if enabled {
+									children = append(children, layout.Rigid(pill(u.th, modeText, modeBG, modeFG)))
 								}
 								children = append(children,
 									layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
-									layout.Rigid(secondaryButton(u.th, &actions.oauth, label)),
+									layout.Rigid(pill(u.th, state, stateBG, stateFG)),
 								)
+								return layout.Flex{Alignment: layout.Middle}.Layout(gtx, children...)
+							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return layout.Inset{Top: unit.Dp(3)}.Layout(gtx, faintCaption(u.th, fmt.Sprintf("%s · active leases %d · %s", entry.Transport.Type, snapshot.ActiveCallCount, entry.ID)))
+							}),
+						)
+					}),
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						return layout.Center.Layout(gtx, v2IdleCountdown(u.th, snapshot.IdleDeadlineAt, idleTimeout, showIdle))
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						children := make([]layout.FlexChild, 0, 14)
+						if showStart {
+							children = append(children, layout.Rigid(v2ServerIconButton(u.th, &actions.start, "▶")))
+						}
+						if showStop {
+							children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, v2ServerIconButton(u.th, &actions.stop, "■"))
+							}))
+						}
+						if showRestart {
+							children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, v2ServerIconButton(u.th, &actions.restart, "↻"))
+							}))
+						}
+						if oauth.Configured {
+							glyph := "○"
+							if oauth.Connected {
+								glyph = "●"
 							}
-							children = append(children,
-								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
-								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return v2ServerEditButton(u, gtx, entry) }),
-								layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
-								layout.Rigid(dangerButton(u.th, &actions.remove, "Remove")),
-							)
-							return layout.Flex{Alignment: layout.Middle}.Layout(gtx, children...)
-						})
+							children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, v2ServerIconButton(u.th, &actions.oauth, glyph))
+							}))
+						}
+						children = append(children,
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, v2ServerIconButton(u.th, &actions.edit, "✎"))
+							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, v2DangerIconButton(u.th, &actions.remove, "×"))
+							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(10)}.Layout(gtx) }),
+							layout.Rigid(v2ServerToggle(&actions.toggle, enabled)),
+						)
+						return layout.Flex{Alignment: layout.Middle}.Layout(gtx, children...)
 					}),
 				)
 			}))
