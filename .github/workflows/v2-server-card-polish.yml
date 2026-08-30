@@ -1,0 +1,511 @@
+name: Apply v2 server card polish
+
+on:
+  push:
+    branches:
+      - ui/v2-server-card-polish
+    paths:
+      - .github/workflows/v2-server-card-polish.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ui/v2-server-card-polish
+      - name: Restore compact server card controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          gio = Path("cmd/tunnel-manager/desktop_v2_gio.go")
+          text = gio.read_text()
+          old = '''type v2ServerActions struct {
+          \tstart   widget.Clickable
+          \tstop    widget.Clickable
+          \trestart widget.Clickable
+          \toauth   widget.Clickable
+          \tremove  widget.Clickable
+          }
+          '''
+          new = '''type v2ServerActions struct {
+          \tstart   widget.Clickable
+          \tstop    widget.Clickable
+          \trestart widget.Clickable
+          \toauth   widget.Clickable
+          \tedit    widget.Clickable
+          \tremove  widget.Clickable
+          \ttoggle  widget.Clickable
+          }
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f"desktop_v2_gio.go: expected one v2ServerActions block, found {text.count(old)}")
+          gio.write_text(text.replace(old, new, 1))
+
+          Path("cmd/tunnel-manager/desktop_v2_pages.go").write_text(r'''//go:build !nogui
+
+          package main
+
+          import (
+          	"context"
+          	"fmt"
+          	"strings"
+
+          	"gioui.org/layout"
+          	"gioui.org/unit"
+          	"gioui.org/widget/material"
+
+          	"github.com/madesai98/GPT-Tunnel-Manager/internal/routedlifecycle"
+          	"github.com/madesai98/GPT-Tunnel-Manager/internal/v2config"
+          )
+
+          func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
+          	if v2ServerEditorActive() {
+          		return v2ServerEditorPage(u, gtx)
+          	}
+          	entries := u.core.Entries()
+          	manager := u.core.ManagerConfig()
+          	snapshots := make(map[string]routedlifecycle.Snapshot)
+          	for _, snapshot := range u.core.Snapshots() {
+          		snapshots[snapshot.ServerID] = snapshot
+          	}
+
+          	body := func(gtx layout.Context) layout.Dimensions {
+          		if len(entries) == 0 {
+          			return card(func(gtx layout.Context) layout.Dimensions {
+          				return mutedCaption(u.th, "No downstream MCP servers are configured yet.")(gtx)
+          			})(gtx)
+          		}
+          		u.list.List.Axis = layout.Vertical
+          		u.list.List.Position.Count = len(entries)
+          		return material.List(u.th, &u.list).Layout(gtx, len(entries), func(gtx layout.Context, index int) layout.Dimensions {
+          			entry := entries[index]
+          			snapshot := snapshots[entry.ID]
+          			actions := u.serverRows[entry.ID]
+          			if actions == nil {
+          				actions = &v2ServerActions{}
+          				u.serverRows[entry.ID] = actions
+          			}
+          			for actions.start.Clicked(gtx) {
+          				id := entry.ID
+          				u.async("starting "+entry.Name, func() error { _, err := u.core.StartServer(context.Background(), id); return err })
+          			}
+          			for actions.stop.Clicked(gtx) {
+          				id := entry.ID
+          				u.async("stopping "+entry.Name, func() error { _, err := u.core.StopServer(context.Background(), id); return err })
+          			}
+          			for actions.restart.Clicked(gtx) {
+          				id := entry.ID
+          				u.async("restarting "+entry.Name, func() error { _, err := u.core.RestartServer(context.Background(), id); return err })
+          			}
+          			for actions.oauth.Clicked(gtx) {
+          				id := entry.ID
+          				status := u.core.OAuthStatus(context.Background(), id)
+          				if status.Configured {
+          					connected := status.Connected
+          					u.async("connecting OAuth for "+entry.Name, func() error {
+          						if connected {
+          							_, err := u.core.ReconnectOAuth(context.Background(), id)
+          							return err
+          						}
+          						_, err := u.core.ConnectOAuth(context.Background(), id)
+          						return err
+          					})
+          				}
+          			}
+          			for actions.edit.Clicked(gtx) {
+          				openExistingV2ServerEditor(entry)
+          				u.invalidate()
+          			}
+          			for actions.remove.Clicked(gtx) {
+          				id := entry.ID
+          				u.async("removing "+entry.Name, func() error { return u.core.DeleteServer(context.Background(), id) })
+          			}
+          			for actions.toggle.Clicked(gtx) {
+          				updated := entry
+          				updated.Mode = v2ToggledServerMode(entry.Mode)
+          				action := "enabling " + entry.Name
+          				if updated.Mode == v2config.ModeDisabled {
+          					action = "disabling " + entry.Name
+          				}
+          				u.async(action, func() error { return u.core.SaveServer(context.Background(), updated) })
+          			}
+
+          			enabled := entry.Mode != v2config.ModeDisabled
+          			state := "STOPPED"
+          			stateBG, stateFG := uiSurfaceRaised, uiMuted
+          			if snapshot.Running {
+          				state, stateBG, stateFG = "RUNNING", uiSuccessSoft, uiSuccess
+          			}
+          			if !enabled {
+          				state, stateBG, stateFG = "DISABLED", uiWarningSoft, uiWarning
+          			}
+
+          			modeText := strings.ToUpper(string(entry.Mode))
+          			modeBG, modeFG := uiAccentSoft, uiAccent
+          			switch entry.Mode {
+          			case v2config.ModeAlwaysOn:
+          				modeText, modeBG, modeFG = "ALWAYS ON", uiSuccessSoft, uiSuccess
+          			case v2config.ModeManual:
+          				modeText, modeBG, modeFG = "MANUAL", uiSurfaceRaised, uiMuted
+          			case v2config.ModeDisabled:
+          				modeText, modeBG, modeFG = "DISABLED", uiWarningSoft, uiWarning
+          			}
+
+          			showStart := enabled && !snapshot.Running
+          			showStop := enabled && snapshot.Running && entry.Mode != v2config.ModeAlwaysOn
+          			showRestart := enabled && snapshot.Running
+          			oauth := u.core.OAuthStatus(context.Background(), entry.ID)
+          			idleTimeout := manager.ManagedDefaults.IdleTimeoutSeconds
+          			if entry.Runtime.IdleTimeoutSeconds != nil {
+          				idleTimeout = *entry.Runtime.IdleTimeoutSeconds
+          			}
+          			showIdle := enabled && entry.Mode == v2config.ModeManaged && snapshot.Running && snapshot.ActiveCallCount == 0
+
+          			return layout.Inset{Bottom: unit.Dp(10)}.Layout(gtx, compactCard(func(gtx layout.Context) layout.Dimensions {
+          				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+          					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+          						return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+          							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+          								children := []layout.FlexChild{
+          									layout.Rigid(sectionTitle(u.th, entry.Name)),
+          									layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(12)}.Layout(gtx) }),
+          								}
+          								if enabled {
+          									children = append(children, layout.Rigid(pill(u.th, modeText, modeBG, modeFG)))
+          								}
+          								children = append(children,
+          									layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
+          									layout.Rigid(pill(u.th, state, stateBG, stateFG)),
+          								)
+          								return layout.Flex{Alignment: layout.Middle}.Layout(gtx, children...)
+          							}),
+          							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+          								return layout.Inset{Top: unit.Dp(3)}.Layout(gtx, faintCaption(u.th, fmt.Sprintf("%s · active leases %d · %s", entry.Transport.Type, snapshot.ActiveCallCount, entry.ID)))
+          							}),
+          						)
+          					}),
+          					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+          						return layout.Center.Layout(gtx, v2IdleCountdown(u.th, snapshot.IdleDeadlineAt, idleTimeout, showIdle))
+          					}),
+          					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+          						children := make([]layout.FlexChild, 0, 14)
+          						if showStart {
+          							children = append(children, layout.Rigid(v2ServerIconButton(u.th, &actions.start, "▶")))
+          						}
+          						if showStop {
+          							children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+          								return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, v2ServerIconButton(u.th, &actions.stop, "■"))
+          							}))
+          						}
+          						if showRestart {
+          							children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+          								return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, v2ServerIconButton(u.th, &actions.restart, "↻"))
+          							}))
+          						}
+          						if oauth.Configured {
+          							glyph := "○"
+          							if oauth.Connected {
+          								glyph = "●"
+          							}
+          							children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+          								return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, v2ServerIconButton(u.th, &actions.oauth, glyph))
+          							}))
+          						}
+          						children = append(children,
+          							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+          								return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, v2ServerIconButton(u.th, &actions.edit, "✎"))
+          							}),
+          							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+          								return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, v2DangerIconButton(u.th, &actions.remove, "×"))
+          							}),
+          							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(10)}.Layout(gtx) }),
+          							layout.Rigid(v2ServerToggle(&actions.toggle, enabled)),
+          						)
+          						return layout.Flex{Alignment: layout.Middle}.Layout(gtx, children...)
+          					}),
+          				)
+          			}))
+          		})
+          	}
+
+          	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+          		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return v2ServerListHeader(u, gtx) }),
+          		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(10)}.Layout(gtx) }),
+          		layout.Flexed(1, body),
+          	)
+          }
+
+          func v2IndexPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
+          	return v2IndexReviewPage(u, gtx)
+          }
+
+          func v2RoutingPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
+          	return v2RoutingEditorPage(u, gtx)
+          }
+          ''')
+
+          Path("cmd/tunnel-manager/desktop_v2_server_widgets.go").write_text(r'''//go:build !nogui
+
+          package main
+
+          import (
+          	"fmt"
+          	"image"
+          	"image/color"
+          	"math"
+          	"time"
+
+          	"gioui.org/f32"
+          	"gioui.org/io/pointer"
+          	"gioui.org/layout"
+          	"gioui.org/op"
+          	"gioui.org/op/clip"
+          	"gioui.org/op/paint"
+          	"gioui.org/unit"
+          	"gioui.org/widget"
+          	"gioui.org/widget/material"
+
+          	"github.com/madesai98/GPT-Tunnel-Manager/internal/v2config"
+          )
+
+          func v2ToggledServerMode(mode v2config.ServerMode) v2config.ServerMode {
+          	if mode == v2config.ModeDisabled {
+          		return v2config.ModeManaged
+          	}
+          	return v2config.ModeDisabled
+          }
+
+          func v2IdleCountdown(th *material.Theme, deadline *time.Time, timeoutSeconds int, visible bool) layout.Widget {
+          	return func(gtx layout.Context) layout.Dimensions {
+          		if !visible || deadline == nil || timeoutSeconds <= 0 {
+          			return layout.Dimensions{}
+          		}
+          		total := time.Duration(timeoutSeconds) * time.Second
+          		remaining := deadline.Sub(gtx.Now)
+          		if remaining < 0 {
+          			remaining = 0
+          		}
+          		progress := float32(remaining) / float32(total)
+          		if progress < 0 {
+          			progress = 0
+          		} else if progress > 1 {
+          			progress = 1
+          		}
+          		gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(250 * time.Millisecond)})
+
+          		size := gtx.Dp(unit.Dp(66))
+          		gtx.Constraints = layout.Exact(image.Pt(size, size))
+          		return layout.Background{}.Layout(gtx,
+          			func(gtx layout.Context) layout.Dimensions {
+          				drawV2IdleProgress(gtx, size, progress)
+          				return layout.Dimensions{Size: image.Pt(size, size)}
+          			},
+          			func(gtx layout.Context) layout.Dimensions {
+          				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+          					label := material.Body1(th, formatV2IdleRemaining(remaining))
+          					label.Color = uiText
+          					label.TextSize = unit.Sp(10)
+          					return label.Layout(gtx)
+          				})
+          			},
+          		)
+          	}
+          }
+
+          func formatV2IdleRemaining(remaining time.Duration) string {
+          	if remaining <= 0 {
+          		return "0s"
+          	}
+          	seconds := int64((remaining + time.Second - 1) / time.Second)
+          	hours := seconds / 3600
+          	minutes := (seconds % 3600) / 60
+          	secs := seconds % 60
+          	if hours > 0 {
+          		return fmt.Sprintf("%dh%dm%ds", hours, minutes, secs)
+          	}
+          	if minutes > 0 {
+          		return fmt.Sprintf("%dm%ds", minutes, secs)
+          	}
+          	return fmt.Sprintf("%ds", secs)
+          }
+
+          func drawV2IdleProgress(gtx layout.Context, size int, progress float32) {
+          	stroke := float32(gtx.Dp(unit.Dp(3)))
+          	inset := gtx.Dp(unit.Dp(5))
+          	bounds := image.Rect(inset, inset, size-inset, size-inset)
+          	paint.FillShape(gtx.Ops, uiSurfaceHover, clip.Stroke{
+          		Path:  clip.Ellipse(bounds).Path(gtx.Ops),
+          		Width: stroke,
+          	}.Op())
+          	if progress <= 0 {
+          		return
+          	}
+
+          	center := f32.Pt(float32(size)/2, float32(size)/2)
+          	radius := float32(bounds.Dx()) / 2
+          	startAngle := -math.Pi / 2
+          	sin, cos := math.Sincos(startAngle)
+          	start := center.Add(f32.Pt(float32(cos)*radius, float32(sin)*radius))
+          	angle := float32(-2 * math.Pi * float64(progress))
+          	if angle <= -2*math.Pi {
+          		angle = float32(-2*math.Pi + 0.001)
+          	}
+
+          	var path clip.Path
+          	path.Begin(gtx.Ops)
+          	path.MoveTo(start)
+          	path.ArcTo(center, center, angle)
+          	paint.FillShape(gtx.Ops, uiAccent, clip.Stroke{Path: path.End(), Width: stroke}.Op())
+          }
+
+          func v2CompactIconButton(th *material.Theme, click *widget.Clickable, glyph string, hoverBG, fg color.NRGBA) layout.Widget {
+          	return func(gtx layout.Context) layout.Dimensions {
+          		size := gtx.Dp(unit.Dp(34))
+          		gtx.Constraints = layout.Exact(image.Pt(size, size))
+          		return click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+          			area := clip.Rect{Max: image.Pt(size, size)}.Push(gtx.Ops)
+          			defer area.Pop()
+          			pointer.CursorPointer.Add(gtx.Ops)
+
+          			bg := color.NRGBA{}
+          			if click.Hovered() {
+          				bg = hoverBG
+          			}
+          			return layout.Background{}.Layout(gtx,
+          				func(gtx layout.Context) layout.Dimensions {
+          					gtx.Constraints.Min = image.Pt(size, size)
+          					return fillRounded(gtx, bg, unit.Dp(9))
+          				},
+          				func(gtx layout.Context) layout.Dimensions {
+          					return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+          						label := material.Body1(th, glyph)
+          						label.Color = fg
+          						label.TextSize = unit.Sp(21)
+          						return label.Layout(gtx)
+          					})
+          				},
+          			)
+          		})
+          	}
+          }
+
+          func v2ServerIconButton(th *material.Theme, click *widget.Clickable, glyph string) layout.Widget {
+          	return v2CompactIconButton(th, click, glyph, uiSurfaceHover, uiText)
+          }
+
+          func v2DangerIconButton(th *material.Theme, click *widget.Clickable, glyph string) layout.Widget {
+          	return v2CompactIconButton(th, click, glyph, uiDangerSoft, uiDanger)
+          }
+
+          func v2ServerToggle(click *widget.Clickable, enabled bool) layout.Widget {
+          	return func(gtx layout.Context) layout.Dimensions {
+          		width := gtx.Dp(unit.Dp(46))
+          		height := gtx.Dp(unit.Dp(26))
+          		gtx.Constraints = layout.Exact(image.Pt(width, height))
+          		return click.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+          			area := clip.Rect{Max: image.Pt(width, height)}.Push(gtx.Ops)
+          			defer area.Pop()
+          			pointer.CursorPointer.Add(gtx.Ops)
+
+          			track := uiSurfaceHover
+          			if enabled {
+          				track = uiAccent
+          			} else if click.Hovered() {
+          				track = color.NRGBA{R: 50, G: 59, B: 75, A: 255}
+          			}
+
+          			radius := height / 2
+          			defer clip.UniformRRect(image.Rect(0, 0, width, height), radius).Push(gtx.Ops).Pop()
+          			paint.Fill(gtx.Ops, track)
+
+          			knobSize := gtx.Dp(unit.Dp(18))
+          			knobY := (height - knobSize) / 2
+          			knobX := gtx.Dp(unit.Dp(4))
+          			if enabled {
+          				knobX = width - knobSize - gtx.Dp(unit.Dp(4))
+          			}
+          			knob := image.Rect(knobX, knobY, knobX+knobSize, knobY+knobSize)
+          			defer clip.Ellipse(knob).Push(gtx.Ops).Pop()
+          			paint.Fill(gtx.Ops, color.NRGBA{R: 245, G: 247, B: 251, A: 255})
+          			return layout.Dimensions{Size: image.Pt(width, height)}
+          		})
+          	}
+          }
+          ''')
+
+          Path("cmd/tunnel-manager/desktop_v2_server_widgets_test.go").write_text(r'''//go:build !nogui
+
+          package main
+
+          import (
+          	"os"
+          	"strings"
+          	"testing"
+          	"time"
+
+          	"github.com/madesai98/GPT-Tunnel-Manager/internal/v2config"
+          )
+
+          func TestV2ToggledServerMode(t *testing.T) {
+          	for _, mode := range []v2config.ServerMode{v2config.ModeManaged, v2config.ModeAlwaysOn, v2config.ModeManual} {
+          		if got := v2ToggledServerMode(mode); got != v2config.ModeDisabled {
+          			t.Fatalf("toggle %q: got %q, want disabled", mode, got)
+          		}
+          	}
+          	if got := v2ToggledServerMode(v2config.ModeDisabled); got != v2config.ModeManaged {
+          		t.Fatalf("toggle disabled: got %q, want managed", got)
+          	}
+          }
+
+          func TestFormatV2IdleRemaining(t *testing.T) {
+          	cases := map[time.Duration]string{
+          		0:                        "0s",
+          		500 * time.Millisecond:   "1s",
+          		61 * time.Second:         "1m1s",
+          		3661 * time.Second:       "1h1m1s",
+          	}
+          	for in, want := range cases {
+          		if got := formatV2IdleRemaining(in); got != want {
+          			t.Fatalf("format %s: got %q, want %q", in, got, want)
+          		}
+          	}
+          }
+
+          func TestV2ServerCardsUseCompactRuntimeControls(t *testing.T) {
+          	data, err := os.ReadFile("desktop_v2_pages.go")
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	text := string(data)
+          	for _, marker := range []string{"compactCard(", "v2IdleCountdown", "v2ServerIconButton", "v2DangerIconButton", "v2ServerToggle"} {
+          		if !strings.Contains(text, marker) {
+          			t.Fatalf("server card is missing compact control marker %q", marker)
+          		}
+          	}
+          	for _, old := range []string{
+          		"secondaryButton(u.th, &actions.start, \"Start\")",
+          		"secondaryButton(u.th, &actions.stop, \"Stop\")",
+          		"secondaryButton(u.th, &actions.restart, \"Restart\")",
+          		"dangerButton(u.th, &actions.remove, \"Remove\")",
+          	} {
+          		if strings.Contains(text, old) {
+          			t.Fatalf("server card still contains legacy full-width control %q", old)
+          		}
+          	}
+          }
+          ''')
+          PY
+          gofmt -w cmd/tunnel-manager/desktop_v2_gio.go cmd/tunnel-manager/desktop_v2_pages.go cmd/tunnel-manager/desktop_v2_server_widgets.go cmd/tunnel-manager/desktop_v2_server_widgets_test.go
+          git rm .github/workflows/v2-server-card-polish.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cmd/tunnel-manager
+          git commit -m "Restore compact v2 server cards"
+          git push origin HEAD:ui/v2-server-card-polish
