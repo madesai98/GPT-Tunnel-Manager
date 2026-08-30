@@ -31,7 +31,9 @@ type v2ServerActions struct {
 	stop    widget.Clickable
 	restart widget.Clickable
 	oauth   widget.Clickable
+	edit    widget.Clickable
 	remove  widget.Clickable
+	toggle  widget.Clickable
 }
 
 type v2DesktopUI struct {
