@@ -13,7 +13,10 @@ import (
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/v2config"
 )
 
-const FingerprintAlgorithm = "hmac-sha256"
+const (
+	FingerprintAlgorithm       = "hmac-sha256"
+	EmbeddingPipelineVersion   = "local-gguf-context-chunking/v1"
+)
 
 type Snapshot struct {
 	RoutingRevision    uint64 `json:"routing_revision"`
@@ -108,11 +111,13 @@ type EmbeddingMaterial struct {
 	Pooling           string                     `json:"pooling"`
 	RuntimeRelease    string                     `json:"runtime_release"`
 	RuntimeBinaryPath string                     `json:"runtime_binary_path,omitempty"`
+	PipelineVersion   string                     `json:"pipeline_version"`
 }
 
 // ConfigMaterial includes the complete selected local embedding identity. As a
 // result, selecting a different model, quantization, pooling mode, dimension,
-// or runtime invalidates the active semantic generation and forces a rebuild.
+// runtime, or embedding-pipeline revision invalidates the active semantic
+// generation and forces a rebuild.
 func ConfigMaterial(manager v2config.ManagerConfig, servers v2config.ServersConfig) RoutingMaterial {
 	entries := append([]v2config.ServerEntry(nil), servers.Servers...)
 	embeddingConfig := v2config.EffectiveEmbeddingConfig(manager.Embedding)
@@ -126,6 +131,7 @@ func ConfigMaterial(manager v2config.ManagerConfig, servers v2config.ServersConf
 			Pooling:           model.Pooling,
 			RuntimeRelease:    embeddingConfig.Runtime.Release,
 			RuntimeBinaryPath: embeddingConfig.Runtime.BinaryPath,
+			PipelineVersion:   EmbeddingPipelineVersion,
 		},
 		Servers: entries,
 	}
