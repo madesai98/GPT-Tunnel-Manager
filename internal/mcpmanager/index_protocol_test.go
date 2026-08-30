@@ -16,7 +16,7 @@ func TestProjectIndexBatchInjectsProtocolContract(t *testing.T) {
 		BatchKey:           "global",
 		Required:           true,
 		RequestFingerprint: "sha256:test",
-		RequestJSON:        json.RawMessage(`{"protocol":"capability-reconciliation/v1","items":[]}`),
+		RequestJSON:        json.RawMessage("{\"protocol\":\"capability-reconciliation/v1\",\"items\":[]}"),
 	}
 	projected, err := projectIndexBatch(batch)
 	if err != nil {
@@ -46,7 +46,7 @@ func TestProjectIndexBatchRejectsProtocolMismatch(t *testing.T) {
 		GenerationID: "gen",
 		Kind:         catalog.BatchCapabilityReconciliation,
 		BatchKey:     "global",
-		RequestJSON:  json.RawMessage(`{"protocol":"tool-enrichment/v1","items":[]}`),
+		RequestJSON:  json.RawMessage("{\"protocol\":\"tool-enrichment/v1\",\"items\":[]}"),
 	}
 	if _, err := projectIndexBatch(batch); err == nil {
 		t.Fatal("expected protocol mismatch to fail closed")
