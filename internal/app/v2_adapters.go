@@ -44,8 +44,12 @@ func (p *liveEmbeddingProvider) Swap(provider embedding.Provider) error {
 		return errors.New("embedding provider is required")
 	}
 	p.mu.Lock()
+	previous := p.provider
 	p.provider = provider
 	p.mu.Unlock()
+	if closer, ok := previous.(embedding.Closer); ok {
+		_ = closer.Close()
+	}
 	return nil
 }
 
