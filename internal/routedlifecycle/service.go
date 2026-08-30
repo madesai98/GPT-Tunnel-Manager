@@ -169,12 +169,12 @@ func New(ctx context.Context, manager v2config.ManagerConfig, servers v2config.S
 	}
 	serviceCtx, cancel := context.WithCancel(ctx)
 	s := &Service{
-		ctx:           serviceCtx,
-		cancel:        cancel,
-		connect:       connect,
-		defaultIdle:   manager.ManagedDefaults.IdleTimeoutSeconds,
-		maxTaskLease:  maximumTaskLease,
-		states:        make(map[string]*serverState, len(servers.Servers)),
+		ctx:          serviceCtx,
+		cancel:       cancel,
+		connect:      connect,
+		defaultIdle:  manager.ManagedDefaults.IdleTimeoutSeconds,
+		maxTaskLease: maximumTaskLease,
+		states:       make(map[string]*serverState, len(servers.Servers)),
 	}
 	for _, entry := range servers.Servers {
 		s.states[entry.ID] = newServerState(entry)
@@ -217,7 +217,12 @@ func (s *Service) Acquire(ctx context.Context, serverID string) (*UseLease, erro
 		st.mu.Unlock()
 		return nil, lifecycleError(executionrouter.CodeServerDisabled, ErrServerDisabled, false)
 	}
-	if st.session != nil && sessionExited(st.session) {
+	if st.session != nil && sessionContractChanged(st.session) && st.active > 0 {
+		busy := busyErrorLocked(st)
+		st.mu.Unlock()
+		return nil, busy
+	}
+	if st.session != nil && (sessionExited(st.session) || sessionContractChanged(st.session)) {
 		stale = st.session
 		st.session = nil
 		st.generation++
@@ -426,13 +431,14 @@ func (s *Service) Snapshots() []Snapshot {
 }
 
 func snapshotLocked(st *serverState) Snapshot {
+	tools := currentToolsLocked(st)
 	out := Snapshot{
 		ServerID:        st.entry.ID,
 		Name:            st.entry.Name,
 		Mode:            st.entry.Mode,
 		Running:         st.session != nil && !sessionExited(st.session),
 		ActiveCallCount: st.active,
-		ToolCount:       len(st.tools.Tools),
+		ToolCount:       len(tools.Tools),
 	}
 	if !st.lastActivity.IsZero() {
 		value := st.lastActivity
@@ -455,7 +461,29 @@ func (s *Service) KnownTools(serverID string) (downstream.ToolSnapshot, error) {
 	if st.deleted {
 		return downstream.ToolSnapshot{}, lifecycleError("server_not_found", ErrServerNotFound, false)
 	}
-	return st.tools.Clone(), nil
+	return currentToolsLocked(st), nil
+}
+
+type currentToolProvider interface {
+	CurrentTools() downstream.ToolSnapshot
+}
+
+type toolContractChangeProvider interface {
+	ToolContractChanged() bool
+}
+
+func currentToolsLocked(st *serverState) downstream.ToolSnapshot {
+	if st != nil && st.session != nil && !sessionExited(st.session) {
+		if provider, ok := st.session.(currentToolProvider); ok {
+			st.tools = provider.CurrentTools().Clone()
+		}
+	}
+	return st.tools.Clone()
+}
+
+func sessionContractChanged(session RuntimeSession) bool {
+	provider, ok := session.(toolContractChangeProvider)
+	return ok && provider.ToolContractChanged()
 }
 
 func (s *Service) Start(ctx context.Context, serverID string) (Snapshot, error) {
@@ -491,7 +519,13 @@ func (s *Service) startState(ctx context.Context, st *serverState) (Snapshot, er
 		st.mu.Unlock()
 		return Snapshot{}, lifecycleError(executionrouter.CodeServerDisabled, ErrServerDisabled, false)
 	}
-	if st.session != nil && sessionExited(st.session) {
+	if st.session != nil && sessionContractChanged(st.session) && st.active > 0 {
+		out := snapshotLocked(st)
+		busy := busyErrorLocked(st)
+		st.mu.Unlock()
+		return out, busy
+	}
+	if st.session != nil && (sessionExited(st.session) || sessionContractChanged(st.session)) {
 		stale = st.session
 		st.session = nil
 		st.generation++
