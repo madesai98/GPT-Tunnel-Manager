@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	processutil "github.com/madesai98/GPT-Tunnel-Manager/internal/process"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/v2config"
 )
 
@@ -181,7 +182,7 @@ func (p *LocalGGUF) ensureServer(ctx context.Context) (string, error) {
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
 	args := []string{"-m", modelPath, "--embedding", "--pooling", p.model.Pooling, "--embd-normalize", "2", "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--parallel", "1", "--sleep-idle-seconds", "60", "--log-disable"}
-	cmd := exec.Command(binary, args...)
+	cmd := processutil.ConfigureCommand(exec.Command(binary, args...))
 	cmd.Dir = filepath.Dir(binary)
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("start local embedding runtime: %w", err)
