@@ -19,6 +19,35 @@ const (
 	maxIndexRequestPageBytes     = 128 * 1024
 )
 
+var indexGetEnrichmentBatchInputSchema = json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["tool_enrichment", "capability_reconciliation", "ambiguity_review"],
+      "description": "Required batch kind."
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Maximum pending batches to return. Defaults to 1. Compatibility: for the single global capability_reconciliation batch, when request_offset is unavailable in a stale client schema, set limit to request_page.next_offset to fetch that request page."
+    },
+    "request_offset": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Zero-based item offset within each returned batch's immutable request. Use request_page.next_offset to fetch the next page."
+    },
+    "request_item_limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "description": "Maximum request items per returned batch page. Defaults to 16; pages may contain fewer items to keep the MCP result bounded."
+    }
+  },
+  "required": ["kind"],
+  "additionalProperties": false
+}`)
+
 type indexStatusOutput struct {
 	Status *indexing.Status `json:"status,omitempty"`
 	Error  *toolError       `json:"error,omitempty"`
@@ -35,7 +64,7 @@ type indexRefreshOutput struct {
 
 type indexGetBatchInput struct {
 	Kind             catalog.EnrichmentBatchKind `json:"kind" jsonschema:"Required batch kind: tool_enrichment, capability_reconciliation, or ambiguity_review."`
-	Limit            int                         `json:"limit,omitempty" jsonschema:"Maximum number of immutable pending batches to return. Defaults to 1."`
+	Limit            int                         `json:"limit,omitempty" jsonschema:"Maximum number of immutable pending batches to return. Defaults to 1. For stale clients that do not expose request_offset, capability_reconciliation may use limit=request_page.next_offset as a compatibility cursor."`
 	RequestOffset    int                         `json:"request_offset,omitempty" jsonschema:"Zero-based item offset within each returned batch's immutable request. Use request_page.next_offset to fetch the next page of a large request."`
 	RequestItemLimit int                         `json:"request_item_limit,omitempty" jsonschema:"Maximum request items per returned batch page. Defaults to 16 and is capped at 64; pages may contain fewer items to keep the MCP result bounded."`
 }
@@ -59,22 +88,22 @@ type indexRequestPage struct {
 // item arrays are projected as deterministic pages so a conversational MCP
 // client never has to consume a multi-megabyte reconciliation result in one call.
 type indexEnrichmentBatch struct {
-	ID                   string                      `json:"batch_id"`
-	GenerationID         string                      `json:"generation_id"`
-	Kind                 catalog.EnrichmentBatchKind `json:"kind"`
-	BatchKey             string                      `json:"batch_key"`
-	Required             bool                        `json:"required"`
-	RequestFingerprint   string                      `json:"request_fingerprint"`
-	Protocol             string                      `json:"protocol" jsonschema:"Enrichment protocol version that governs this batch and its response."`
-	ResponseSchema       map[string]any              `json:"response_schema" jsonschema:"Exact JSON Schema object for the response value accepted by index_submit_enrichment_batch. Follow this schema instead of guessing protocol fields."`
-	ResponseSchemaJSON   string                      `json:"response_schema_json" jsonschema:"Exact response JSON Schema serialized as JSON text. This duplicates response_schema deliberately so clients that handle free-form nested schemas poorly still receive the complete contract."`
-	AgentInstructions    []string                    `json:"agent_instructions" jsonschema:"Protocol-local instructions injected by GPT Tunnel Manager so a fresh agent can complete the batch without external prompt or skill context."`
-	Request              map[string]any              `json:"request" jsonschema:"Deterministic page of the immutable enrichment request JSON. When request_page.complete is false, fetch every subsequent page before constructing the batch response."`
-	RequestPage          *indexRequestPage           `json:"request_page,omitempty" jsonschema:"Pagination metadata for request.items. Pages with the same batch_id and request_fingerprint together reconstruct the exact immutable request."`
-	AcceptedFingerprint  string                      `json:"accepted_fingerprint,omitempty"`
-	AcceptedResponse     map[string]any              `json:"accepted_response,omitempty" jsonschema:"Previously accepted agent response JSON, when this batch has already been accepted."`
-	CreatedAt            time.Time                   `json:"created_at"`
-	AcceptedAt           *time.Time                  `json:"accepted_at,omitempty"`
+	ID                  string                      `json:"batch_id"`
+	GenerationID        string                      `json:"generation_id"`
+	Kind                catalog.EnrichmentBatchKind `json:"kind"`
+	BatchKey            string                      `json:"batch_key"`
+	Required            bool                        `json:"required"`
+	RequestFingerprint  string                      `json:"request_fingerprint"`
+	Protocol            string                      `json:"protocol" jsonschema:"Enrichment protocol version that governs this batch and its response."`
+	ResponseSchema      map[string]any              `json:"response_schema" jsonschema:"Exact JSON Schema object for the response value accepted by index_submit_enrichment_batch. Follow this schema instead of guessing protocol fields."`
+	ResponseSchemaJSON  string                      `json:"response_schema_json" jsonschema:"Exact response JSON Schema serialized as JSON text. This duplicates response_schema deliberately so clients that handle free-form nested schemas poorly still receive the complete contract."`
+	AgentInstructions   []string                    `json:"agent_instructions" jsonschema:"Protocol-local instructions injected by GPT Tunnel Manager so a fresh agent can complete the batch without external prompt or skill context."`
+	Request             map[string]any              `json:"request" jsonschema:"Deterministic page of the immutable enrichment request JSON. When request_page.complete is false, fetch every subsequent page before constructing the batch response."`
+	RequestPage         *indexRequestPage           `json:"request_page,omitempty" jsonschema:"Pagination metadata for request.items. Pages with the same batch_id and request_fingerprint together reconstruct the exact immutable request."`
+	AcceptedFingerprint string                      `json:"accepted_fingerprint,omitempty"`
+	AcceptedResponse    map[string]any              `json:"accepted_response,omitempty" jsonschema:"Previously accepted agent response JSON, when this batch has already been accepted."`
+	CreatedAt           time.Time                   `json:"created_at"`
+	AcceptedAt          *time.Time                  `json:"accepted_at,omitempty"`
 }
 
 type indexGetBatchOutput struct {
@@ -136,17 +165,19 @@ func registerV2IndexTools(server *mcp.Server, service *indexing.Service) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "index_get_enrichment_batch", Title: "Get enrichment work",
-		Description: "Return immutable unclaimed enrichment work with the exact response schema and protocol-local agent instructions. Large request.items arrays are returned in deterministic bounded pages; follow request_page.next_offset until complete before submitting. Required tool_enrichment and capability_reconciliation work blocks commit; ambiguity_review work is optional and non-blocking.",
+		Description: "Return immutable unclaimed enrichment work with the exact response schema and protocol-local agent instructions. Large request.items arrays are returned in deterministic bounded pages; follow request_page.next_offset until complete before submitting. Fresh clients should use request_offset. A stale client whose cached schema exposes only kind and limit can fetch capability-reconciliation pages with limit=request_page.next_offset. Required tool_enrichment and capability_reconciliation work blocks commit; ambiguity_review work is optional and non-blocking.",
+		InputSchema: indexGetEnrichmentBatchInputSchema,
 		Annotations: &mcp.ToolAnnotations{Title: "Get enrichment work", ReadOnlyHint: true, DestructiveHint: &nondestructive, IdempotentHint: true, OpenWorldHint: &closed},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input indexGetBatchInput) (*mcp.CallToolResult, indexGetBatchOutput, error) {
 		if service == nil {
 			return indexBatchFailure(errors.New("manager_index_unavailable"))
 		}
-		batches, err := service.GetBatch(ctx, input.Kind, input.Limit)
+		batchLimit, requestOffset := resolveIndexGetBatchPaging(input)
+		batches, err := service.GetBatch(ctx, input.Kind, batchLimit)
 		if err != nil {
 			return indexBatchFailure(err)
 		}
-		projected, err := projectIndexBatchesPage(batches, input.RequestOffset, input.RequestItemLimit)
+		projected, err := projectIndexBatchesPage(batches, requestOffset, input.RequestItemLimit)
 		if err != nil {
 			return indexBatchFailure(err)
 		}
@@ -186,6 +217,21 @@ func registerV2IndexTools(server *mcp.Server, service *indexing.Service) {
 		}
 		return nil, indexCommitOutput{Result: &result}, nil
 	})
+}
+
+func resolveIndexGetBatchPaging(input indexGetBatchInput) (batchLimit, requestOffset int) {
+	batchLimit = input.Limit
+	requestOffset = input.RequestOffset
+	if input.Kind == catalog.BatchCapabilityReconciliation {
+		// Capability reconciliation is canonically one global batch. That makes
+		// positive limit values above 1 an otherwise-unused compatibility channel
+		// for clients that cached the pre-pagination two-field MCP input schema.
+		batchLimit = 1
+		if requestOffset == 0 && input.Limit > 1 {
+			requestOffset = input.Limit
+		}
+	}
+	return batchLimit, requestOffset
 }
 
 func projectIndexBatches(batches []catalog.EnrichmentBatch) ([]indexEnrichmentBatch, error) {
@@ -239,6 +285,10 @@ func projectIndexBatchPage(batch catalog.EnrichmentBatch, offset, itemLimit int)
 			return indexEnrichmentBatch{}, err
 		}
 	}
+	instructions := append([]string(nil), descriptor.AgentInstructions...)
+	if batch.Kind == catalog.BatchCapabilityReconciliation {
+		instructions = append(instructions, "If your MCP client rejects request_offset because it cached an older index_get_enrichment_batch schema that exposes only kind and limit, continue without restarting enrichment: call index_get_enrichment_batch with kind=capability_reconciliation and limit=request_page.next_offset. Because capability reconciliation is one global batch, Manager treats limit>1 as that page offset when request_offset is omitted. Keep collecting pages until request_page.complete=true.")
+	}
 	return indexEnrichmentBatch{
 		ID:                  batch.ID,
 		GenerationID:        batch.GenerationID,
@@ -249,7 +299,7 @@ func projectIndexBatchPage(batch catalog.EnrichmentBatch, offset, itemLimit int)
 		Protocol:            descriptor.Protocol,
 		ResponseSchema:      responseSchema,
 		ResponseSchemaJSON:  string(responseSchemaBody),
-		AgentInstructions:   append([]string(nil), descriptor.AgentInstructions...),
+		AgentInstructions:   instructions,
 		Request:             pagedRequest,
 		RequestPage:         requestPage,
 		AcceptedFingerprint: batch.AcceptedFingerprint,
