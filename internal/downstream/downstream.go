@@ -88,6 +88,10 @@ type Session struct {
 	sdk      *mcp.ClientSession
 	initial  ToolSnapshot
 
+	currentMu sync.RWMutex
+	current   ToolSnapshot
+	refreshMu sync.Mutex
+
 	supportsToolListChanged bool
 	toolContractChanged     *atomic.Bool
 	notifyOnce              *sync.Once
@@ -115,6 +119,7 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 	changed := &atomic.Bool{}
 	notifyOnce := &sync.Once{}
 	callbacks := &callbackState{}
+	var liveSession atomic.Pointer[Session]
 	markChanged := func() {
 		changed.Store(true)
 		notifyOnce.Do(func() {
@@ -128,6 +133,9 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 		previous := opts.ToolListChangedHandler
 		opts.ToolListChangedHandler = func(callbackCtx context.Context, req *mcp.ToolListChangedRequest) {
 			markChanged()
+			if session := liveSession.Load(); session != nil {
+				session.refreshToolsAsync(callbackCtx)
+			}
 			safeToolListChangedHandler(previous, callbackCtx, req)
 		}
 		prepareCallbackBridge(opts, callbacks)
@@ -219,6 +227,7 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 		serverID:                server.ID,
 		sdk:                     sdkSession,
 		initial:                 initial,
+		current:                 initial,
 		supportsToolListChanged: supportsChanged,
 		toolContractChanged:     changed,
 		notifyOnce:              notifyOnce,
@@ -228,12 +237,58 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 		processDone:             processDone,
 		shutdown:                server.ShutdownTimeout(),
 	}
+	liveSession.Store(s)
+	if changed.Load() {
+		s.refreshToolsAsync(context.Background())
+	}
 	return s, nil
 }
 
 func (s *Session) ServerID() string { return s.serverID }
 
 func (s *Session) InitialTools() ToolSnapshot { return s.initial.Clone() }
+
+func (s *Session) CurrentTools() ToolSnapshot {
+	if s == nil {
+		return ToolSnapshot{}
+	}
+	s.currentMu.RLock()
+	current := s.current
+	s.currentMu.RUnlock()
+	if current.Fingerprint == "" && len(current.Tools) == 0 {
+		return s.initial.Clone()
+	}
+	return current.Clone()
+}
+
+func (s *Session) setCurrentTools(snapshot ToolSnapshot) {
+	if s == nil {
+		return
+	}
+	s.currentMu.Lock()
+	s.current = snapshot.Clone()
+	s.currentMu.Unlock()
+}
+
+func (s *Session) refreshToolsAsync(parent context.Context) {
+	if s == nil || s.sdk == nil {
+		return
+	}
+	go func() {
+		s.refreshMu.Lock()
+		defer s.refreshMu.Unlock()
+		base := context.Background()
+		if parent != nil {
+			base = context.WithoutCancel(parent)
+		}
+		refreshCtx, cancel := context.WithTimeout(base, 10*time.Second)
+		defer cancel()
+		current, err := SnapshotTools(refreshCtx, s.sdk)
+		if err == nil {
+			s.setCurrentTools(current)
+		}
+	}()
+}
 
 func (s *Session) SupportsToolListChanged() bool { return s.supportsToolListChanged }
 
@@ -245,7 +300,12 @@ func (s *Session) ListTools(ctx context.Context) (ToolSnapshot, error) {
 	if err := s.ensureAvailable(); err != nil {
 		return ToolSnapshot{}, err
 	}
-	return SnapshotTools(ctx, s.sdk)
+	current, err := SnapshotTools(ctx, s.sdk)
+	if err != nil {
+		return ToolSnapshot{}, err
+	}
+	s.setCurrentTools(current)
+	return current, nil
 }
 
 func (s *Session) RevalidateTools(ctx context.Context) error {
@@ -256,6 +316,7 @@ func (s *Session) RevalidateTools(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	s.setCurrentTools(current)
 	if current.Fingerprint != s.initial.Fingerprint {
 		s.markToolContractChanged()
 		return fmt.Errorf("%w: server %s tools/list fingerprint changed from %s to %s", ErrToolContractChanged, s.serverID, s.initial.Fingerprint, current.Fingerprint)
