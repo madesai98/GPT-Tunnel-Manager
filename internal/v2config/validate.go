@@ -6,14 +6,17 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
 
 var (
-	serverIDPattern = regexp.MustCompile(`^srv_[a-f0-9]{32}$`)
-	tunnelIDPattern = regexp.MustCompile(`^tunnel_[a-f0-9]{32}$`)
-	envNamePattern  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	serverIDPattern       = regexp.MustCompile(`^srv_[a-f0-9]{32}$`)
+	tunnelIDPattern       = regexp.MustCompile(`^tunnel_[a-f0-9]{32}$`)
+	envNamePattern        = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	embeddingModelPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+	sha256Pattern         = regexp.MustCompile(`^[a-f0-9]{64}$`)
 )
 
 var restrictedStaticHeaders = map[string]struct{}{
@@ -97,24 +100,75 @@ func ValidateManager(c ManagerConfig) error {
 }
 
 func validateEmbedding(c EmbeddingConfig) error {
-	if c.Provider != EmbeddingProviderOpenAICompatible {
-		return fmt.Errorf("embedding.provider must be %q", EmbeddingProviderOpenAICompatible)
+	// The only accepted non-local shape is the released v2 setting so existing
+	// installations can boot and migrate. It is never used for inference.
+	if c.Provider == EmbeddingProviderOpenAICompatible {
+		if strings.TrimSpace(c.Model) == "" {
+			return errors.New("legacy embedding.model is required")
+		}
+		if _, err := validateHTTPURL(c.BaseURL); err != nil {
+			return fmt.Errorf("legacy embedding.base_url: %w", err)
+		}
+		if err := validateSecretRef(c.CredentialRef); err != nil {
+			return fmt.Errorf("legacy embedding.credential_ref: %w", err)
+		}
+		return nil
 	}
-	if strings.TrimSpace(c.Model) == "" {
-		return errors.New("embedding.model is required")
+	if c.Provider != EmbeddingProviderLocalGGUF {
+		return fmt.Errorf("embedding.provider must be %q", EmbeddingProviderLocalGGUF)
 	}
-	u, err := validateHTTPURL(c.BaseURL)
-	if err != nil {
-		return fmt.Errorf("embedding.base_url: %w", err)
+	if !embeddingModelPattern.MatchString(c.Model) {
+		return errors.New("embedding.model must be a lowercase model id using letters, digits, '.', '_' or '-'")
 	}
-	if err := validateSecretRef(c.CredentialRef); err != nil {
-		return fmt.Errorf("embedding.credential_ref: %w", err)
+	if strings.TrimSpace(c.Runtime.Release) == "" {
+		return errors.New("embedding.runtime.release is required")
 	}
-	if u.Scheme != "https" && !isLoopbackHost(u.Hostname()) {
-		return errors.New("embedding.base_url must use https unless it is loopback")
+	if strings.TrimSpace(c.Runtime.BinaryPath) != c.Runtime.BinaryPath {
+		return errors.New("embedding.runtime.binary_path may not have leading or trailing whitespace")
 	}
-	if c.Dimensions != nil && (*c.Dimensions <= 0 || *c.Dimensions > 65536) {
-		return errors.New("embedding.dimensions must be between 1 and 65536")
+	if len(c.Models) == 0 {
+		return errors.New("embedding.models must contain at least one model")
+	}
+	seen := make(map[string]struct{}, len(c.Models))
+	selected := false
+	for i, model := range c.Models {
+		if !embeddingModelPattern.MatchString(model.ID) {
+			return fmt.Errorf("embedding.models[%d].id is invalid", i)
+		}
+		if _, ok := seen[model.ID]; ok {
+			return fmt.Errorf("embedding.models[%d]: duplicate model id %q", i, model.ID)
+		}
+		seen[model.ID] = struct{}{}
+		if strings.TrimSpace(model.Name) == "" || strings.TrimSpace(model.Name) != model.Name {
+			return fmt.Errorf("embedding.models[%d].name must be non-empty and trimmed", i)
+		}
+		u, err := url.Parse(model.DownloadURL)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+			return fmt.Errorf("embedding.models[%d].download_url must be an https URL without userinfo", i)
+		}
+		if filepath.Base(model.FileName) != model.FileName || model.FileName == "." || model.FileName == "" {
+			return fmt.Errorf("embedding.models[%d].file_name must be a file name without directories", i)
+		}
+		if !sha256Pattern.MatchString(model.SHA256) {
+			return fmt.Errorf("embedding.models[%d].sha256 must be 64 lowercase hexadecimal characters", i)
+		}
+		if model.Dimensions <= 0 || model.Dimensions > 65536 {
+			return fmt.Errorf("embedding.models[%d].dimensions must be between 1 and 65536", i)
+		}
+		switch model.Pooling {
+		case "cls", "mean", "last", "rank":
+		default:
+			return fmt.Errorf("embedding.models[%d].pooling must be cls, mean, last, or rank", i)
+		}
+		if model.ID == c.Model {
+			selected = true
+		}
+	}
+	if !selected {
+		return fmt.Errorf("embedding.model %q is not present in embedding.models", c.Model)
+	}
+	if c.BaseURL != "" || c.CredentialRef != "" || c.Dimensions != nil {
+		return errors.New("legacy online embedding fields are not allowed with local_gguf")
 	}
 	return nil
 }

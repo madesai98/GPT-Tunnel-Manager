@@ -110,8 +110,16 @@ func TestPhase11ManagerConfigurationPersistsThroughFacade(t *testing.T) {
 
 	cfg := application.ManagerConfig()
 	cfg.LocalManager.Port = 43123
-	dimensions := 768
-	cfg.Embedding.Dimensions = &dimensions
+	cfg.Embedding.Models = append(cfg.Embedding.Models, v2config.EmbeddingModel{
+		ID:          "phase11-custom-q8",
+		Name:        "Phase 11 Custom Q8",
+		DownloadURL: "https://example.com/phase11-custom.gguf",
+		FileName:    "phase11-custom.gguf",
+		SHA256:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Dimensions:  768,
+		Pooling:     "mean",
+	})
+	cfg.Embedding.Model = "phase11-custom-q8"
 	cfg.Index.QueryEmbeddingCacheEntries = 512
 	cfg.ManagedDefaults.IdleTimeoutSeconds = 42
 	cfg.Logging.CaptureLevel = "debug"
@@ -130,7 +138,8 @@ func TestPhase11ManagerConfigurationPersistsThroughFacade(t *testing.T) {
 	}
 
 	got := application.ManagerConfig()
-	if got.LocalManager.Port != 43123 || got.Embedding.Dimensions == nil || *got.Embedding.Dimensions != 768 {
+	model, ok := got.Embedding.SelectedModel()
+	if got.LocalManager.Port != 43123 || !ok || got.Embedding.Model != "phase11-custom-q8" || model.Dimensions != 768 || model.Pooling != "mean" {
 		t.Fatalf("manager local/embedding config not persisted: %+v", got)
 	}
 	if got.Index.QueryEmbeddingCacheEntries != 512 || got.ManagedDefaults.IdleTimeoutSeconds != 42 {
