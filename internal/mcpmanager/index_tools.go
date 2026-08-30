@@ -13,6 +13,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+const (
+	defaultIndexRequestPageItems = 16
+	maxIndexRequestPageItems     = 64
+	maxIndexRequestPageBytes     = 128 * 1024
+)
+
 type indexStatusOutput struct {
 	Status *indexing.Status `json:"status,omitempty"`
 	Error  *toolError       `json:"error,omitempty"`
@@ -28,17 +34,30 @@ type indexRefreshOutput struct {
 }
 
 type indexGetBatchInput struct {
-	Kind  catalog.EnrichmentBatchKind `json:"kind" jsonschema:"Required batch kind: tool_enrichment, capability_reconciliation, or ambiguity_review."`
-	Limit int                         `json:"limit,omitempty" jsonschema:"Maximum number of immutable pending work items to return. Defaults to 1."`
+	Kind             catalog.EnrichmentBatchKind `json:"kind" jsonschema:"Required batch kind: tool_enrichment, capability_reconciliation, or ambiguity_review."`
+	Limit            int                         `json:"limit,omitempty" jsonschema:"Maximum number of immutable pending batches to return. Defaults to 1."`
+	RequestOffset    int                         `json:"request_offset,omitempty" jsonschema:"Zero-based item offset within each returned batch's immutable request. Use request_page.next_offset to fetch the next page of a large request."`
+	RequestItemLimit int                         `json:"request_item_limit,omitempty" jsonschema:"Maximum request items per returned batch page. Defaults to 16 and is capped at 64; pages may contain fewer items to keep the MCP result bounded."`
+}
+
+type indexRequestPage struct {
+	Offset     int  `json:"offset"`
+	Returned   int  `json:"returned"`
+	TotalItems int  `json:"total_items"`
+	NextOffset int  `json:"next_offset,omitempty"`
+	Complete   bool `json:"complete"`
 }
 
 // indexEnrichmentBatch is the MCP-facing projection of a persisted enrichment
 // batch. The catalog intentionally stores request/accepted-response bodies as
 // json.RawMessage, but reflecting RawMessage directly into an MCP output schema
-// describes it as []byte (an array). On the wire these fields are arbitrary JSON
-// values, so decode them before handing the object to the typed MCP tool layer.
+// describes it as []byte (an array). On the wire these fields are JSON objects,
+// so decode them before handing the object to the typed MCP tool layer.
+//
 // Protocol metadata is injected here at read time, so even batches persisted by
-// an older Manager become fully self-describing after an upgrade.
+// an older Manager become fully self-describing after an upgrade. Large request
+// item arrays are projected as deterministic pages so a conversational MCP
+// client never has to consume a multi-megabyte reconciliation result in one call.
 type indexEnrichmentBatch struct {
 	ID                   string                      `json:"batch_id"`
 	GenerationID         string                      `json:"generation_id"`
@@ -47,11 +66,13 @@ type indexEnrichmentBatch struct {
 	Required             bool                        `json:"required"`
 	RequestFingerprint   string                      `json:"request_fingerprint"`
 	Protocol             string                      `json:"protocol" jsonschema:"Enrichment protocol version that governs this batch and its response."`
-	ResponseSchema       any                         `json:"response_schema" jsonschema:"Exact JSON Schema for the response value accepted by index_submit_enrichment_batch. Follow this schema instead of guessing protocol fields."`
+	ResponseSchema       map[string]any              `json:"response_schema" jsonschema:"Exact JSON Schema object for the response value accepted by index_submit_enrichment_batch. Follow this schema instead of guessing protocol fields."`
+	ResponseSchemaJSON   string                      `json:"response_schema_json" jsonschema:"Exact response JSON Schema serialized as JSON text. This duplicates response_schema deliberately so clients that handle free-form nested schemas poorly still receive the complete contract."`
 	AgentInstructions    []string                    `json:"agent_instructions" jsonschema:"Protocol-local instructions injected by GPT Tunnel Manager so a fresh agent can complete the batch without external prompt or skill context."`
-	Request              any                         `json:"request" jsonschema:"Immutable enrichment request JSON for the declared batch protocol."`
+	Request              map[string]any              `json:"request" jsonschema:"Deterministic page of the immutable enrichment request JSON. When request_page.complete is false, fetch every subsequent page before constructing the batch response."`
+	RequestPage          *indexRequestPage           `json:"request_page,omitempty" jsonschema:"Pagination metadata for request.items. Pages with the same batch_id and request_fingerprint together reconstruct the exact immutable request."`
 	AcceptedFingerprint  string                      `json:"accepted_fingerprint,omitempty"`
-	AcceptedResponse     any                         `json:"accepted_response,omitempty" jsonschema:"Previously accepted agent response JSON, when this batch has already been accepted."`
+	AcceptedResponse     map[string]any              `json:"accepted_response,omitempty" jsonschema:"Previously accepted agent response JSON, when this batch has already been accepted."`
 	CreatedAt            time.Time                   `json:"created_at"`
 	AcceptedAt           *time.Time                  `json:"accepted_at,omitempty"`
 }
@@ -63,7 +84,7 @@ type indexGetBatchOutput struct {
 
 type indexSubmitBatchInput struct {
 	BatchID  string `json:"batch_id" jsonschema:"Immutable enrichment batch identifier returned by index_get_enrichment_batch."`
-	Response any    `json:"response" jsonschema:"Agent-produced response. Fetch the batch first and follow its response_schema and agent_instructions exactly. Unknown response fields are rejected."`
+	Response any    `json:"response" jsonschema:"Agent-produced response. Fetch every request page first, then follow response_schema and agent_instructions exactly. Unknown response fields are rejected."`
 }
 
 type indexSubmitBatchOutput struct {
@@ -84,7 +105,7 @@ func registerV2IndexTools(server *mcp.Server, service *indexing.Service) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "index_status", Title: "Get index status",
-		Description: "Report active/staging generation readiness, pending required enrichment work, and open non-blocking Ambiguity Reviews separately.",
+		Description: "Report active/staging generation readiness, per-kind enrichment state, explicit promotion blockers, the next autonomous action, and open non-blocking Ambiguity Reviews.",
 		Annotations: &mcp.ToolAnnotations{Title: "Get index status", ReadOnlyHint: true, DestructiveHint: &nondestructive, IdempotentHint: true, OpenWorldHint: &closed},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, indexStatusOutput, error) {
 		if service == nil {
@@ -115,7 +136,7 @@ func registerV2IndexTools(server *mcp.Server, service *indexing.Service) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "index_get_enrichment_batch", Title: "Get enrichment work",
-		Description: "Return immutable unclaimed enrichment work. Every batch includes its exact response_schema and protocol-local agent_instructions so no external GPT Tunnel Manager prompt or skill knowledge is required. Required tool_enrichment and capability_reconciliation work blocks commit; ambiguity_review work is optional and non-blocking.",
+		Description: "Return immutable unclaimed enrichment work with the exact response schema and protocol-local agent instructions. Large request.items arrays are returned in deterministic bounded pages; follow request_page.next_offset until complete before submitting. Required tool_enrichment and capability_reconciliation work blocks commit; ambiguity_review work is optional and non-blocking.",
 		Annotations: &mcp.ToolAnnotations{Title: "Get enrichment work", ReadOnlyHint: true, DestructiveHint: &nondestructive, IdempotentHint: true, OpenWorldHint: &closed},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input indexGetBatchInput) (*mcp.CallToolResult, indexGetBatchOutput, error) {
 		if service == nil {
@@ -125,7 +146,7 @@ func registerV2IndexTools(server *mcp.Server, service *indexing.Service) {
 		if err != nil {
 			return indexBatchFailure(err)
 		}
-		projected, err := projectIndexBatches(batches)
+		projected, err := projectIndexBatchesPage(batches, input.RequestOffset, input.RequestItemLimit)
 		if err != nil {
 			return indexBatchFailure(err)
 		}
@@ -134,7 +155,7 @@ func registerV2IndexTools(server *mcp.Server, service *indexing.Service) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "index_submit_enrichment_batch", Title: "Submit enrichment work",
-		Description: "Submit one immutable enrichment batch using the response_schema returned with that batch. Unknown fields are rejected. The first valid response is accepted, an identical repeat is idempotent, and conflicting repeats fail closed.",
+		Description: "Submit one immutable enrichment batch after reading every request page and following the response_schema returned with that batch. Unknown fields are rejected. The first valid response is accepted, an identical repeat is idempotent, and conflicting repeats fail closed.",
 		Annotations: &mcp.ToolAnnotations{Title: "Submit enrichment work", ReadOnlyHint: false, DestructiveHint: &nondestructive, IdempotentHint: true, OpenWorldHint: &closed},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input indexSubmitBatchInput) (*mcp.CallToolResult, indexSubmitBatchOutput, error) {
 		if service == nil {
@@ -168,9 +189,13 @@ func registerV2IndexTools(server *mcp.Server, service *indexing.Service) {
 }
 
 func projectIndexBatches(batches []catalog.EnrichmentBatch) ([]indexEnrichmentBatch, error) {
+	return projectIndexBatchesPage(batches, 0, defaultIndexRequestPageItems)
+}
+
+func projectIndexBatchesPage(batches []catalog.EnrichmentBatch, offset, itemLimit int) ([]indexEnrichmentBatch, error) {
 	projected := make([]indexEnrichmentBatch, 0, len(batches))
 	for _, batch := range batches {
-		item, err := projectIndexBatch(batch)
+		item, err := projectIndexBatchPage(batch, offset, itemLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -180,7 +205,11 @@ func projectIndexBatches(batches []catalog.EnrichmentBatch) ([]indexEnrichmentBa
 }
 
 func projectIndexBatch(batch catalog.EnrichmentBatch) (indexEnrichmentBatch, error) {
-	request, err := decodeIndexJSONValue(batch.RequestJSON, "request", batch.ID)
+	return projectIndexBatchPage(batch, 0, defaultIndexRequestPageItems)
+}
+
+func projectIndexBatchPage(batch catalog.EnrichmentBatch, offset, itemLimit int) (indexEnrichmentBatch, error) {
+	request, err := decodeIndexJSONObject(batch.RequestJSON, "request", batch.ID)
 	if err != nil {
 		return indexEnrichmentBatch{}, err
 	}
@@ -191,37 +220,112 @@ func projectIndexBatch(batch catalog.EnrichmentBatch) (indexEnrichmentBatch, err
 	if err := validateProjectedBatchProtocol(request, descriptor.Protocol, batch.ID); err != nil {
 		return indexEnrichmentBatch{}, err
 	}
-	var accepted any
+	pagedRequest, requestPage, err := pageIndexRequest(request, offset, itemLimit, batch.ID)
+	if err != nil {
+		return indexEnrichmentBatch{}, err
+	}
+	responseSchema, ok := descriptor.ResponseSchema.(map[string]any)
+	if !ok {
+		return indexEnrichmentBatch{}, fmt.Errorf("enrichment batch %s response schema is not a JSON object", batch.ID)
+	}
+	responseSchemaBody, err := json.Marshal(responseSchema)
+	if err != nil {
+		return indexEnrichmentBatch{}, fmt.Errorf("encode enrichment batch %s response schema: %w", batch.ID, err)
+	}
+	var accepted map[string]any
 	if len(batch.AcceptedResponseJSON) != 0 {
-		accepted, err = decodeIndexJSONValue(batch.AcceptedResponseJSON, "accepted response", batch.ID)
+		accepted, err = decodeIndexJSONObject(batch.AcceptedResponseJSON, "accepted response", batch.ID)
 		if err != nil {
 			return indexEnrichmentBatch{}, err
 		}
 	}
 	return indexEnrichmentBatch{
-		ID: batch.ID,
-		GenerationID: batch.GenerationID,
-		Kind: batch.Kind,
-		BatchKey: batch.BatchKey,
-		Required: batch.Required,
-		RequestFingerprint: batch.RequestFingerprint,
-		Protocol: descriptor.Protocol,
-		ResponseSchema: descriptor.ResponseSchema,
-		AgentInstructions: append([]string(nil), descriptor.AgentInstructions...),
-		Request: request,
+		ID:                  batch.ID,
+		GenerationID:        batch.GenerationID,
+		Kind:                batch.Kind,
+		BatchKey:            batch.BatchKey,
+		Required:            batch.Required,
+		RequestFingerprint:  batch.RequestFingerprint,
+		Protocol:            descriptor.Protocol,
+		ResponseSchema:      responseSchema,
+		ResponseSchemaJSON:  string(responseSchemaBody),
+		AgentInstructions:   append([]string(nil), descriptor.AgentInstructions...),
+		Request:             pagedRequest,
+		RequestPage:         requestPage,
 		AcceptedFingerprint: batch.AcceptedFingerprint,
-		AcceptedResponse: accepted,
-		CreatedAt: batch.CreatedAt,
-		AcceptedAt: batch.AcceptedAt,
+		AcceptedResponse:    accepted,
+		CreatedAt:           batch.CreatedAt,
+		AcceptedAt:          batch.AcceptedAt,
 	}, nil
 }
 
-func validateProjectedBatchProtocol(request any, expected, batchID string) error {
-	object, ok := request.(map[string]any)
-	if !ok {
-		return fmt.Errorf("enrichment batch %s request is not a JSON object", batchID)
+func pageIndexRequest(request map[string]any, offset, itemLimit int, batchID string) (map[string]any, *indexRequestPage, error) {
+	if offset < 0 {
+		return nil, nil, fmt.Errorf("enrichment batch %s request_offset must be non-negative", batchID)
 	}
-	protocol, ok := object["protocol"].(string)
+	itemsValue, hasItems := request["items"]
+	if !hasItems {
+		if offset != 0 {
+			return nil, nil, fmt.Errorf("enrichment batch %s request has no pageable items; request_offset must be zero", batchID)
+		}
+		return cloneJSONObject(request), nil, nil
+	}
+	items, ok := itemsValue.([]any)
+	if !ok {
+		return nil, nil, fmt.Errorf("enrichment batch %s request.items is not a JSON array", batchID)
+	}
+	if offset > len(items) {
+		return nil, nil, fmt.Errorf("enrichment batch %s request_offset %d exceeds total item count %d", batchID, offset, len(items))
+	}
+	if itemLimit <= 0 {
+		itemLimit = defaultIndexRequestPageItems
+	}
+	if itemLimit > maxIndexRequestPageItems {
+		itemLimit = maxIndexRequestPageItems
+	}
+	end := offset + itemLimit
+	if end > len(items) {
+		end = len(items)
+	}
+	// Item count is only an upper bound. Shrink the page until the serialized
+	// request fits a conservative conversational-MCP payload budget. A single
+	// oversized item is still returned so the batch can never become unpageable.
+	for end > offset+1 {
+		candidate := cloneJSONObject(request)
+		candidate["items"] = append([]any(nil), items[offset:end]...)
+		body, err := json.Marshal(candidate)
+		if err != nil {
+			return nil, nil, fmt.Errorf("encode enrichment batch %s request page: %w", batchID, err)
+		}
+		if len(body) <= maxIndexRequestPageBytes {
+			break
+		}
+		end--
+	}
+	paged := cloneJSONObject(request)
+	paged["items"] = append([]any(nil), items[offset:end]...)
+	page := &indexRequestPage{
+		Offset:     offset,
+		Returned:   end - offset,
+		TotalItems: len(items),
+		Complete:   end == len(items),
+	}
+	if !page.Complete {
+		page.NextOffset = end
+	}
+	return paged, page, nil
+}
+
+func cloneJSONObject(value map[string]any) map[string]any {
+	cloned := make(map[string]any, len(value))
+	for key, item := range value {
+		cloned[key] = item
+	}
+	return cloned
+}
+
+func validateProjectedBatchProtocol(request map[string]any, expected, batchID string) error {
+	protocol, ok := request["protocol"].(string)
 	if !ok || protocol == "" {
 		return fmt.Errorf("enrichment batch %s request is missing protocol", batchID)
 	}
@@ -231,13 +335,16 @@ func validateProjectedBatchProtocol(request any, expected, batchID string) error
 	return nil
 }
 
-func decodeIndexJSONValue(body json.RawMessage, field, batchID string) (any, error) {
+func decodeIndexJSONObject(body json.RawMessage, field, batchID string) (map[string]any, error) {
 	if len(body) == 0 {
 		return nil, fmt.Errorf("enrichment batch %s has empty %s JSON", batchID, field)
 	}
-	var value any
+	var value map[string]any
 	if err := json.Unmarshal(body, &value); err != nil {
 		return nil, fmt.Errorf("decode enrichment batch %s %s JSON: %w", batchID, field, err)
+	}
+	if value == nil {
+		return nil, fmt.Errorf("enrichment batch %s %s JSON is not an object", batchID, field)
 	}
 	return value, nil
 }
