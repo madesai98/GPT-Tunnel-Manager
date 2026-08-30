@@ -410,7 +410,7 @@ func (u *v2DesktopUI) mainArea(gtx layout.Context) layout.Dimensions {
 	switch u.page {
 	case "index": title, subtitle = "Index", "Build and promote the routing catalog for the current routing state."
 	case "routing": title, subtitle = "Routing", "Manage routing profiles, preference revisions, and review state."
-	case "settings": title, subtitle = "Settings", "Configure local Manager protection, tunnel exposure, embeddings, and native behavior."
+	case "settings": title, subtitle = "Settings", "Configure local Manager protection, tunnel exposure, local embeddings, and native behavior."
 	case "logs": title, subtitle = "Logs", "Filter, inspect, clear, and export structured v2 runtime logs."
 	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -488,39 +488,22 @@ func (u *v2DesktopUI) settingsPage(gtx layout.Context) layout.Dimensions {
 			cfg.LocalManager.AccessProtectionEnabled = u.protection.Value
 			cfg.ManagerTunnel.Enabled = u.managerTunnel.Value
 			cfg.ManagerTunnel.TunnelID = strings.TrimSpace(u.managerTunnelID.Text())
-			if err := u.core.SaveManager(context.Background(), cfg); err != nil { return err }
-			embed := cfg.Embedding
-			embed.BaseURL = strings.TrimSpace(u.embeddingBase.Text())
-			embed.Model = strings.TrimSpace(u.embeddingModel.Text())
-			var key []byte
-			if strings.TrimSpace(u.embeddingKey.Text()) != "" { key = []byte(u.embeddingKey.Text()) }
-			if err := u.core.SetEmbedding(context.Background(), embed, key); err != nil { return err }
-			u.embeddingKey.SetText("")
-			return nil
+			return u.core.SaveManager(context.Background(), cfg)
 		})
 	}
-	credentialStatus := "not configured"
-	if u.core.EmbeddingCredentialConfigured(context.Background()) { credentialStatus = "configured" }
 	u.settingsScroll.Axis = layout.Vertical
 	return u.settingsScroll.Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
 		return card(func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(sectionTitle(u.th, "Local Manager")),
-			layout.Rigid(material.CheckBox(u.th, &u.protection, "Require local Manager capability").Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(16)}.Layout(gtx) }),
-			layout.Rigid(sectionTitle(u.th, "Manager Secure MCP Tunnel")),
-			layout.Rigid(material.CheckBox(u.th, &u.managerTunnel, "Enable Manager tunnel").Layout),
-			layout.Rigid(editorSurface(u.th, &u.managerTunnelID, "Tunnel ID")),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(16)}.Layout(gtx) }),
-			layout.Rigid(sectionTitle(u.th, "Embeddings")),
-			layout.Rigid(editorSurface(u.th, &u.embeddingBase, "OpenAI-compatible base URL")),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(7)}.Layout(gtx) }),
-			layout.Rigid(editorSurface(u.th, &u.embeddingModel, "Embedding model")),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, editorSurface(u.th, &u.embeddingKey, "API key (leave blank to keep current)")) }),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(5)}.Layout(gtx, faintCaption(u.th, "Credential: "+credentialStatus)) }),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(14)}.Layout(gtx, primaryButton(u.th, &u.saveSettings, "Save Manager & Embedding Settings")) }),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return v2ProductSettingsSection(u, gtx) }),
-		)
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(sectionTitle(u.th, "Local Manager")),
+				layout.Rigid(material.CheckBox(u.th, &u.protection, "Require local Manager capability").Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(16)}.Layout(gtx) }),
+				layout.Rigid(sectionTitle(u.th, "Manager Secure MCP Tunnel")),
+				layout.Rigid(material.CheckBox(u.th, &u.managerTunnel, "Enable Manager tunnel").Layout),
+				layout.Rigid(editorSurface(u.th, &u.managerTunnelID, "Tunnel ID")),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(14)}.Layout(gtx, primaryButton(u.th, &u.saveSettings, "Save Manager Settings")) }),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return v2ProductSettingsSection(u, gtx) }),
+			)
 		})(gtx)
 	})
 }
