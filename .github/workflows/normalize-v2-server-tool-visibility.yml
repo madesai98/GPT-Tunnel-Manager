@@ -1,0 +1,104 @@
+name: Normalize server tool visibility diff
+
+on:
+  push:
+    branches:
+      - ui/v2-server-tool-visibility
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    if: github.event.head_commit.message != 'Normalize server tool visibility diff'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ui/v2-server-tool-visibility
+          fetch-depth: 0
+      - name: Normalize files to focused changes
+        shell: bash
+        run: |
+          git fetch origin main
+          # Revert files where gofmt created unrelated churn, then re-apply only
+          # the intended focused edits from the implementation commit.
+          git show origin/main:cmd/tunnel-manager/desktop_v2_gio.go > /tmp/gio.main
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/tmp/gio.main')
+          text = p.read_text()
+          old = '\tedit    widget.Clickable\n\tremove  widget.Clickable\n'
+          new = '\tedit    widget.Clickable\n\ttools   widget.Clickable\n\tremove  widget.Clickable\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'desktop_v2_gio marker count={text.count(old)}')
+          Path('cmd/tunnel-manager/desktop_v2_gio.go').write_text(text.replace(old, new, 1))
+          PY
+
+          # v2_app.go only needs the new public methods. Keep main formatting and
+          # transplant the method block from the implemented branch.
+          git show origin/main:internal/app/v2_app.go > /tmp/app.main
+          git show HEAD:internal/app/v2_app.go > /tmp/app.branch
+          python3 - <<'PY'
+          from pathlib import Path
+          main = Path('/tmp/app.main').read_text()
+          branch = Path('/tmp/app.branch').read_text()
+          start = branch.index('func (a *V2App) KnownServerToolNames(')
+          end = branch.index('\nfunc (a *V2App) StartServer(', start)
+          block = branch[start:end] + '\n'
+          anchor = 'func (a *V2App) StartServer('
+          pos = main.index(anchor)
+          Path('internal/app/v2_app.go').write_text(main[:pos] + block + main[pos:])
+          PY
+
+          # routed lifecycle: keep main formatting and transplant only the new
+          # fields, cached initial tools assignments, and KnownTools method.
+          git show origin/main:internal/routedlifecycle/service.go > /tmp/lifecycle.main
+          git show HEAD:internal/routedlifecycle/service.go > /tmp/lifecycle.branch
+          python3 - <<'PY'
+          from pathlib import Path
+          main = Path('/tmp/lifecycle.main').read_text()
+          branch = Path('/tmp/lifecycle.branch').read_text()
+
+          def one(text, old, new, label):
+              n = text.count(old)
+              if n != 1:
+                  raise SystemExit(f'{label}: expected 1, got {n}')
+              return text.replace(old, new, 1)
+
+          main = one(main,
+              '\tActiveCallCount int                 `json:"active_call_count"`\n',
+              '\tActiveCallCount int                 `json:"active_call_count"`\n\tToolCount       int                 `json:"tool_count"`\n', 'snapshot field')
+          main = one(main,
+              '\tentry           v2config.ServerEntry\n\tsession         RuntimeSession\n\tactive          int\n',
+              '\tentry           v2config.ServerEntry\n\tsession         RuntimeSession\n\ttools           downstream.ToolSnapshot\n\tactive          int\n', 'state field')
+          main = one(main,
+              '\t\tActiveCallCount: st.active,\n',
+              '\t\tActiveCallCount: st.active,\n\t\tToolCount:       len(st.tools.Tools),\n', 'snapshot value')
+
+          # Cache initial tools after every successful connection assignment.
+          main = main.replace('\tst.session = connected\n\tst.generation++\n',
+                              '\tst.session = connected\n\tst.tools = connected.InitialTools().Clone()\n\tst.generation++\n')
+          main = main.replace('\t\tst.session = connected\n\t\tst.generation++\n',
+                              '\t\tst.session = connected\n\t\tst.tools = connected.InitialTools().Clone()\n\t\tst.generation++\n')
+
+          start = branch.index('func (s *Service) KnownTools(')
+          end = branch.index('\nfunc (s *Service) Start(', start)
+          block = branch[start:end] + '\n'
+          anchor = 'func (s *Service) Start('
+          pos = main.index(anchor)
+          Path('internal/routedlifecycle/service.go').write_text(main[:pos] + block + main[pos:])
+          PY
+
+          git diff --check
+      - name: Commit normalization
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cmd/tunnel-manager/desktop_v2_gio.go internal/app/v2_app.go internal/routedlifecycle/service.go
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Normalize server tool visibility diff"
+          git push origin HEAD:ui/v2-server-tool-visibility
