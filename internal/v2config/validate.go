@@ -183,6 +183,19 @@ func ValidateServer(e ServerEntry) error {
 			return fmt.Errorf("environment secret %q: %w", k, err)
 		}
 	}
+	seenHiddenTools := make(map[string]struct{}, len(e.ToolVisibility.Hidden))
+	for _, name := range e.ToolVisibility.Hidden {
+		if strings.TrimSpace(name) == "" || strings.TrimSpace(name) != name {
+			return errors.New("tool_visibility.hidden names must be non-empty and trimmed")
+		}
+		if len(name) > 512 {
+			return errors.New("tool_visibility.hidden names may not exceed 512 bytes")
+		}
+		if _, exists := seenHiddenTools[name]; exists {
+			return fmt.Errorf("duplicate hidden tool %q", name)
+		}
+		seenHiddenTools[name] = struct{}{}
+	}
 	return validateTransport(e.Transport)
 }
 

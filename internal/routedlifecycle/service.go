@@ -105,6 +105,7 @@ type Snapshot struct {
 	Mode            v2config.ServerMode `json:"mode"`
 	Running         bool                `json:"running"`
 	ActiveCallCount int                 `json:"active_call_count"`
+	ToolCount       int                 `json:"tool_count"`
 	LastActivityAt  *time.Time          `json:"last_activity_at,omitempty"`
 	IdleDeadlineAt  *time.Time          `json:"idle_deadline_at,omitempty"`
 }
@@ -131,6 +132,7 @@ type serverState struct {
 
 	entry           v2config.ServerEntry
 	session         RuntimeSession
+	tools           downstream.ToolSnapshot
 	active          int
 	lastActivity    time.Time
 	idleTimer       *time.Timer
@@ -167,12 +169,12 @@ func New(ctx context.Context, manager v2config.ManagerConfig, servers v2config.S
 	}
 	serviceCtx, cancel := context.WithCancel(ctx)
 	s := &Service{
-		ctx:           serviceCtx,
-		cancel:        cancel,
-		connect:       connect,
-		defaultIdle:   manager.ManagedDefaults.IdleTimeoutSeconds,
-		maxTaskLease:  maximumTaskLease,
-		states:        make(map[string]*serverState, len(servers.Servers)),
+		ctx:          serviceCtx,
+		cancel:       cancel,
+		connect:      connect,
+		defaultIdle:  manager.ManagedDefaults.IdleTimeoutSeconds,
+		maxTaskLease: maximumTaskLease,
+		states:       make(map[string]*serverState, len(servers.Servers)),
 	}
 	for _, entry := range servers.Servers {
 		s.states[entry.ID] = newServerState(entry)
@@ -283,6 +285,7 @@ func (s *Service) Acquire(ctx context.Context, serverID string) (*UseLease, erro
 			return nil, busy
 		}
 		st.session = connected
+		st.tools = connected.InitialTools().Clone()
 		st.generation++
 		generation := st.generation
 		st.lastActivity = time.Now().UTC()
@@ -429,6 +432,7 @@ func snapshotLocked(st *serverState) Snapshot {
 		Mode:            st.entry.Mode,
 		Running:         st.session != nil && !sessionExited(st.session),
 		ActiveCallCount: st.active,
+		ToolCount:       len(st.tools.Tools),
 	}
 	if !st.lastActivity.IsZero() {
 		value := st.lastActivity
@@ -439,6 +443,19 @@ func snapshotLocked(st *serverState) Snapshot {
 		out.IdleDeadlineAt = &value
 	}
 	return out
+}
+
+func (s *Service) KnownTools(serverID string) (downstream.ToolSnapshot, error) {
+	st, err := s.lookup(serverID)
+	if err != nil {
+		return downstream.ToolSnapshot{}, err
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.deleted {
+		return downstream.ToolSnapshot{}, lifecycleError("server_not_found", ErrServerNotFound, false)
+	}
+	return st.tools.Clone(), nil
 }
 
 func (s *Service) Start(ctx context.Context, serverID string) (Snapshot, error) {
@@ -524,6 +541,7 @@ func (s *Service) startState(ctx context.Context, st *serverState) (Snapshot, er
 
 	st.mu.Lock()
 	st.session = connected
+	st.tools = connected.InitialTools().Clone()
 	st.generation++
 	generation := st.generation
 	st.runtimeChanging = false
@@ -667,6 +685,7 @@ func (s *Service) Restart(ctx context.Context, serverID string) (Snapshot, error
 	}
 	st.mu.Lock()
 	st.session = connected
+	st.tools = connected.InitialTools().Clone()
 	st.generation++
 	generation := st.generation
 	st.runtimeChanging = false

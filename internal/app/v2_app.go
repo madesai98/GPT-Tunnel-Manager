@@ -334,6 +334,72 @@ func (a *V2App) Snapshots() []routedlifecycle.Snapshot {
 	return a.lifecycle.Snapshots()
 }
 
+func (a *V2App) KnownServerToolNames(ctx context.Context, serverID string) ([]string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	set := make(map[string]struct{})
+	live := false
+	if a != nil && a.lifecycle != nil {
+		snapshot, err := a.lifecycle.KnownTools(serverID)
+		if err == nil && len(snapshot.Tools) > 0 {
+			live = true
+			for _, tool := range snapshot.Tools {
+				if tool != nil && strings.TrimSpace(tool.Name) != "" {
+					set[tool.Name] = struct{}{}
+				}
+			}
+		}
+	}
+	if !live && a != nil && a.catalog != nil {
+		if generation, err := a.catalog.ActiveGeneration(ctx); err == nil {
+			rows, queryErr := a.catalog.DB().QueryContext(ctx, `SELECT tool_name FROM source_tools WHERE generation_id = ? AND server_id = ? ORDER BY tool_name`, generation.ID, serverID)
+			if queryErr != nil {
+				return nil, queryErr
+			}
+			for rows.Next() {
+				var name string
+				if err := rows.Scan(&name); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				set[name] = struct{}{}
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			rows.Close()
+		}
+	}
+	for _, entry := range a.Entries() {
+		if entry.ID != serverID {
+			continue
+		}
+		for _, name := range entry.ToolVisibility.Hidden {
+			set[name] = struct{}{}
+		}
+		break
+	}
+	names := make([]string, 0, len(set))
+	for name := range set {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+func (a *V2App) KnownServerToolCounts(ctx context.Context) map[string]int {
+	counts := make(map[string]int)
+	for _, entry := range a.Entries() {
+		names, err := a.KnownServerToolNames(ctx, entry.ID)
+		if err == nil {
+			counts[entry.ID] = len(names)
+		}
+	}
+	return counts
+}
+
 func (a *V2App) ManagerSnapshot() V2ManagerSnapshot {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -344,8 +410,8 @@ func (a *V2App) ManagerSnapshot() V2ManagerSnapshot {
 	return V2ManagerSnapshot{
 		MCPURL: url, Running: a.started,
 		AccessProtectionEnabled: a.manager.LocalManager.AccessProtectionEnabled,
-		ManagerTunnelEnabled: a.manager.ManagerTunnel.Enabled,
-		ManagerTunnelID: a.manager.ManagerTunnel.TunnelID,
+		ManagerTunnelEnabled:    a.manager.ManagerTunnel.Enabled,
+		ManagerTunnelID:         a.manager.ManagerTunnel.TunnelID,
 	}
 }
 
