@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/catalog"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/downstream"
@@ -44,14 +46,21 @@ func connectWithPersistentToolIdentity(factory *downstream.Factory, c *catalog.C
 			return fail(err)
 		}
 		if observation.SemanticChanged {
-			if err := c.MarkDirty(observationCtx, "server:"+entry.ID, "new or changed downstream tool contract", effective.Fingerprint); err != nil {
-				return fail(fmt.Errorf("mark semantic tool change for %s: %w", entry.ID, err))
-			}
-			if _, err := tracker.AdvanceRoutingRevision(observationCtx); err != nil {
-				return fail(fmt.Errorf("advance routing revision for %s tool change: %w", entry.ID, err))
+			if err := markSemanticToolChange(observationCtx, c, tracker, entry, effective.Fingerprint); err != nil {
+				return fail(err)
 			}
 		}
-		return &persistentToolSession{session: session, entry: entry, effective: effective}, nil
+		wrapped := &persistentToolSession{
+			session:               session,
+			entry:                 entry,
+			effective:             effective,
+			catalog:               c,
+			tracker:               tracker,
+			initialLiveFingerprint: live.Fingerprint,
+			observerDone:          make(chan struct{}),
+		}
+		wrapped.watchLiveToolChanges()
+		return wrapped, nil
 	}
 }
 
@@ -59,6 +68,12 @@ type persistentToolSession struct {
 	session   *downstream.Session
 	entry     v2config.ServerEntry
 	effective downstream.ToolSnapshot
+	catalog   *catalog.Catalog
+	tracker   *routingstate.Tracker
+
+	initialLiveFingerprint string
+	observerDone           chan struct{}
+	observerClose          sync.Once
 }
 
 func (s *persistentToolSession) InitialTools() downstream.ToolSnapshot {
@@ -76,6 +91,10 @@ func (s *persistentToolSession) CurrentTools() downstream.ToolSnapshot {
 	if err != nil {
 		return downstream.ToolSnapshot{}
 	}
+	// CurrentTools is used by lifecycle/UI state. Reconcile opportunistically in
+	// addition to the notification watcher so polling-only callers also update
+	// availability without forcing a semantic reindex.
+	_ = s.observeLiveSnapshot(filtered)
 	return filtered
 }
 
@@ -94,6 +113,7 @@ func (s *persistentToolSession) Close(ctx context.Context) error {
 	if s == nil || s.session == nil {
 		return nil
 	}
+	s.stopObserver()
 	return s.session.Close(ctx)
 }
 
@@ -116,12 +136,76 @@ func (s *persistentToolSession) CallTool(ctx context.Context, params *mcp.CallTo
 	}
 	result, err := s.session.CallTool(ctx, params)
 	if errors.Is(err, downstream.ErrToolContractChanged) {
-		// The lifecycle will reconnect this changed session before the next
-		// acquire. That reconnect performs the authoritative per-tool comparison
-		// and decides whether this was semantic drift or presence-only churn.
+		// Availability has already been reconciled from the refreshed live
+		// snapshot. The lifecycle reconnects before the next acquire so a real
+		// semantic contract change gets a fresh authoritative session snapshot.
 		return nil, fmt.Errorf("%w: downstream tool availability changed; reconnect required", downstream.ErrDownstreamUnavailable)
 	}
 	return result, err
+}
+
+func (s *persistentToolSession) watchLiveToolChanges() {
+	if s == nil || s.session == nil || s.observerDone == nil {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.observerDone:
+				return
+			case <-ticker.C:
+				if !s.session.ToolContractChanged() {
+					continue
+				}
+				filtered, err := filterExposedTools(s.session.CurrentTools(), s.entry)
+				if err != nil || filtered.Fingerprint == s.initialLiveFingerprint {
+					continue
+				}
+				_ = s.observeLiveSnapshot(filtered)
+				return
+			}
+		}
+	}()
+}
+
+func (s *persistentToolSession) stopObserver() {
+	if s == nil || s.observerDone == nil {
+		return
+	}
+	s.observerClose.Do(func() { close(s.observerDone) })
+}
+
+func (s *persistentToolSession) observeLiveSnapshot(snapshot downstream.ToolSnapshot) error {
+	if s == nil || s.catalog == nil {
+		return nil
+	}
+	ctx := context.Background()
+	observation, err := s.catalog.ObserveServerTools(ctx, s.entry.ID, snapshot.Tools)
+	if err != nil {
+		return err
+	}
+	if !observation.SemanticChanged {
+		return nil
+	}
+	effective, err := cachedSemanticSnapshot(ctx, s.catalog, s.entry)
+	if err != nil {
+		return err
+	}
+	return markSemanticToolChange(ctx, s.catalog, s.tracker, s.entry, effective.Fingerprint)
+}
+
+func markSemanticToolChange(ctx context.Context, c *catalog.Catalog, tracker *routingstate.Tracker, entry v2config.ServerEntry, fingerprint string) error {
+	if err := c.MarkDirty(ctx, "server:"+entry.ID, "new or changed downstream tool contract", fingerprint); err != nil {
+		return fmt.Errorf("mark semantic tool change for %s: %w", entry.ID, err)
+	}
+	if tracker != nil {
+		if _, err := tracker.AdvanceRoutingRevision(ctx); err != nil {
+			return fmt.Errorf("advance routing revision for %s tool change: %w", entry.ID, err)
+		}
+	}
+	return nil
 }
 
 func filterExposedTools(snapshot downstream.ToolSnapshot, entry v2config.ServerEntry) (downstream.ToolSnapshot, error) {
