@@ -209,9 +209,9 @@ func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 }
 
 func v2IndexPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
-	return v2IndexReviewPage(u, gtx)
+	return v2RoutingWorkspacePage(u, gtx)
 }
 
 func v2RoutingPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
-	return v2RoutingEditorPage(u, gtx)
+	return v2RoutingWorkspacePage(u, gtx)
 }
