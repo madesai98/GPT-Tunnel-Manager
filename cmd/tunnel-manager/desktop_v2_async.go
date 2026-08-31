@@ -51,13 +51,15 @@ type v2UIAsyncState struct {
 	tasks       map[string]v2BackgroundTask
 	uiCallbacks []func()
 
-	routingWorkerOnce sync.Once
-	routingWake       chan struct{}
-	routing           v2RoutingPrepared
-	routingLoaded     bool
-	routingLoading    bool
-	routingDirty      bool
-	routingError      string
+	routingWorkerOnce  sync.Once
+	routingWake        chan struct{}
+	routing            v2RoutingPrepared
+	routingStarted     bool
+	routingLoaded      bool
+	routingLoading     bool
+	routingDirty       bool
+	routingError       string
+	routingAttemptedAt time.Time
 
 	filterKey string
 	filtered  []coreapp.V2RoutingTarget
@@ -108,8 +110,9 @@ func (u *v2DesktopUI) runTask(key, label, detail string, fn func() error) bool {
 
 	state := v2AsyncStateFor(u)
 	state.mu.Lock()
-	if _, exists := state.tasks[key]; exists {
+	if running, exists := state.tasks[key]; exists {
 		state.mu.Unlock()
+		u.setMessage("Already running: " + running.Label)
 		return false
 	}
 	state.tasks[key] = v2BackgroundTask{Key: key, Label: label, Detail: detail, StartedAt: time.Now()}
@@ -142,10 +145,11 @@ func (u *v2DesktopUI) runTask(key, label, detail string, fn func() error) bool {
 		}
 		u.mu.Unlock()
 
-		// Server lifecycle, settings, visibility, preference, index, and
-		// embedding operations can all change routing state. Rebuild the cached
-		// workspace after a completed action without blocking the render loop.
-		v2RefreshRoutingSnapshot(u)
+		// If the routing workspace has been opened, actions that might change
+		// the catalog invalidate its prepared snapshot. Do not start the heavy
+		// routing worker just because a user performed an unrelated action on
+		// another page.
+		v2RefreshRoutingSnapshotIfStarted(u)
 		u.invalidate()
 	}()
 	return true
@@ -260,13 +264,17 @@ func v2EnsureRoutingSnapshot(u *v2DesktopUI) {
 	state := v2AsyncStateFor(u)
 	state.routingWorkerOnce.Do(func() { go v2RoutingCacheLoop(u, state) })
 
+	now := time.Now()
 	state.mu.Lock()
-	fresh := state.routingLoaded && time.Since(state.routing.UpdatedAt) < 5*time.Second
-	if fresh || state.routingLoading {
+	state.routingStarted = true
+	fresh := state.routingLoaded && now.Sub(state.routing.UpdatedAt) < 5*time.Second
+	retryBackoff := !state.routingAttemptedAt.IsZero() && now.Sub(state.routingAttemptedAt) < 2*time.Second
+	if fresh || state.routingLoading || retryBackoff {
 		state.mu.Unlock()
 		return
 	}
 	state.routingLoading = true
+	state.routingAttemptedAt = now
 	state.mu.Unlock()
 
 	select {
@@ -275,17 +283,29 @@ func v2EnsureRoutingSnapshot(u *v2DesktopUI) {
 	}
 }
 
+func v2RefreshRoutingSnapshotIfStarted(u *v2DesktopUI) {
+	state := v2AsyncStateFor(u)
+	state.mu.Lock()
+	started := state.routingStarted
+	state.mu.Unlock()
+	if started {
+		v2RefreshRoutingSnapshot(u)
+	}
+}
+
 func v2RefreshRoutingSnapshot(u *v2DesktopUI) {
 	state := v2AsyncStateFor(u)
 	state.routingWorkerOnce.Do(func() { go v2RoutingCacheLoop(u, state) })
 
 	state.mu.Lock()
+	state.routingStarted = true
 	if state.routingLoading {
 		state.routingDirty = true
 		state.mu.Unlock()
 		return
 	}
 	state.routingLoading = true
+	state.routingAttemptedAt = time.Now()
 	state.mu.Unlock()
 
 	select {
