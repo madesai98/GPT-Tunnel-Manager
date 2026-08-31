@@ -48,22 +48,22 @@ func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 			}
 			for actions.start.Clicked(gtx) {
 				id := entry.ID
-				u.async("starting "+entry.Name, func() error { _, err := u.core.StartServer(context.Background(), id); return err })
+				u.runTask("server:"+id, "Starting "+entry.Name, "Starting the downstream MCP runtime in the background.", func() error { _, err := u.core.StartServer(context.Background(), id); return err })
 			}
 			for actions.stop.Clicked(gtx) {
 				id := entry.ID
-				u.async("stopping "+entry.Name, func() error { _, err := u.core.StopServer(context.Background(), id); return err })
+				u.runTask("server:"+id, "Stopping "+entry.Name, "Stopping the downstream MCP runtime in the background.", func() error { _, err := u.core.StopServer(context.Background(), id); return err })
 			}
 			for actions.restart.Clicked(gtx) {
 				id := entry.ID
-				u.async("restarting "+entry.Name, func() error { _, err := u.core.RestartServer(context.Background(), id); return err })
+				u.runTask("server:"+id, "Restarting "+entry.Name, "Restarting the downstream MCP runtime in the background.", func() error { _, err := u.core.RestartServer(context.Background(), id); return err })
 			}
 			for actions.oauth.Clicked(gtx) {
 				id := entry.ID
 				status := u.core.OAuthStatus(context.Background(), id)
 				if status.Configured {
 					connected := status.Connected
-					u.async("connecting OAuth for "+entry.Name, func() error {
+					u.runTask("server:"+id, "Connecting OAuth for "+entry.Name, "Completing downstream OAuth in the background.", func() error {
 						if connected {
 							_, err := u.core.ReconnectOAuth(context.Background(), id)
 							return err
@@ -78,26 +78,28 @@ func v2ServersPage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 				u.invalidate()
 			}
 			for actions.tools.Clicked(gtx) {
-				names, err := u.core.KnownServerToolNames(context.Background(), entry.ID)
-				if err != nil {
-					u.setMessage("loading tools for " + entry.Name + ": " + err.Error())
-				} else {
-					openV2ToolVisibilityEditor(entry, names)
-					u.invalidate()
-				}
+				selected := entry
+				u.runTask("tools:"+selected.ID, "Loading tools for "+selected.Name, "Reading discovered tool metadata in the background.", func() error {
+					names, err := u.core.KnownServerToolNames(context.Background(), selected.ID)
+					if err != nil {
+						return err
+					}
+					u.postUI(func() { openV2ToolVisibilityEditor(selected, names) })
+					return nil
+				})
 			}
 			for actions.remove.Clicked(gtx) {
 				id := entry.ID
-				u.async("removing "+entry.Name, func() error { return u.core.DeleteServer(context.Background(), id) })
+				u.runTask("server:"+id, "Removing "+entry.Name, "Removing the downstream server configuration in the background.", func() error { return u.core.DeleteServer(context.Background(), id) })
 			}
 			for actions.toggle.Clicked(gtx) {
 				updated := entry
 				updated.Mode = v2ToggledServerMode(entry.Mode)
-				action := "enabling " + entry.Name
+				action := "Enabling " + entry.Name
 				if updated.Mode == v2config.ModeDisabled {
-					action = "disabling " + entry.Name
+					action = "Disabling " + entry.Name
 				}
-				u.async(action, func() error { return u.core.SaveServer(context.Background(), updated) })
+				u.runTask("server:"+entry.ID, action, "Updating the downstream server mode in the background.", func() error { return u.core.SaveServer(context.Background(), updated) })
 			}
 
 			enabled := entry.Mode != v2config.ModeDisabled

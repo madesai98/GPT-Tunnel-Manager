@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"sort"
 	"strings"
 
 	"gioui.org/f32"
@@ -17,7 +16,6 @@ import (
 	"gioui.org/widget"
 
 	coreapp "github.com/madesai98/GPT-Tunnel-Manager/internal/app"
-	"github.com/madesai98/GPT-Tunnel-Manager/internal/catalog"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/indexing"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/routingprefs"
 )
@@ -65,50 +63,28 @@ var v2RouteWorkspace struct {
 func v2RoutingWorkspacePage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 	ensureV2RoutingEditor()
 	v2ExplorerEnsure()
-	ctx := context.Background()
-	status, err := u.core.IndexStatus(ctx)
-	if err != nil {
-		return card(mutedCaption(u.th, err.Error()))(gtx)
-	}
-	prefs, err := u.core.RoutingPreferences(ctx)
-	if err != nil {
-		return card(mutedCaption(u.th, err.Error()))(gtx)
-	}
-	targets, err := u.core.RoutingTargets(ctx)
-	if err != nil {
-		return card(mutedCaption(u.th, err.Error()))(gtx)
-	}
-	sort.Slice(prefs.Profiles, func(i, j int) bool { return prefs.Profiles[i].Name < prefs.Profiles[j].Name })
-	sort.Slice(targets, func(i, j int) bool {
-		if targets[i].ServerID == targets[j].ServerID {
-			return targets[i].ToolName < targets[j].ToolName
-		}
-		return targets[i].ServerID < targets[j].ServerID
-	})
-	toolBatches, _ := u.core.PendingEnrichment(ctx, catalog.BatchToolEnrichment, 100)
-	capBatches, _ := u.core.PendingEnrichment(ctx, catalog.BatchCapabilityReconciliation, 100)
-	reviews, _ := u.core.PendingEnrichment(ctx, catalog.BatchAmbiguityReview, 100)
-	hierarchy, hierarchyFound, _ := u.core.RoutingCapabilityHierarchy(ctx)
 
-	serverNames := map[string]string{}
-	for _, entry := range u.core.Entries() {
-		serverNames[entry.ID] = entry.Name
+	// The routing workspace used to rebuild its full snapshot synchronously on
+	// every Gio frame. With hundreds or thousands of tools that meant database
+	// reads, sorting, capability aggregation, and filtering could all block the
+	// window event loop. The UI now renders an immutable prepared snapshot while
+	// a background worker refreshes it.
+	v2EnsureRoutingSnapshot(u)
+	prepared, loaded, loading, loadErr := v2RoutingSnapshotFor(u)
+	if !loaded {
+		return v2RoutingWorkspaceLoading(u, gtx, loading, loadErr)
 	}
-	states := v2WorkspaceStates(prefs.Rules, toolBatches, capBatches)
-	liveDrift := false
-	for _, target := range targets {
-		if target.AssumptionFingerprint != "" {
-			continue
-		}
-		liveDrift = true
-		key := v2RoutingTargetKey(target)
-		s := states[key]
-		if s.agent == "" && !s.needsReview && s.preference == "" {
-			s.preference = "NEW · REFRESH INDEX"
-		}
-		states[key] = s
-	}
-	hierarchyUsable := hierarchyFound && !liveDrift
+
+	status := prepared.Status
+	prefs := prepared.Prefs
+	targets := prepared.Targets
+	toolBatches := prepared.ToolBatches
+	capBatches := prepared.CapBatches
+	reviews := prepared.Reviews
+	hierarchy := prepared.Hierarchy
+	hierarchyUsable := prepared.HierarchyUsable
+	serverNames := prepared.ServerNames
+	states := prepared.States
 
 	v2WorkspaceIndexActions(u, gtx)
 	v2WorkspacePreferenceActions(u, gtx, prefs, targets)
@@ -120,18 +96,18 @@ func v2RoutingWorkspacePage(u *v2DesktopUI, gtx layout.Context) layout.Dimension
 	}
 	var groups []v2RoutingExplorerGroup
 	if hierarchyUsable && v2RouteExplorer.groupBy == "capabilities" {
-		groups = v2ExplorerCapabilityGroups(targets, hierarchy)
+		groups = prepared.CapabilityGroups
 	} else {
-		groups = v2ExplorerServerGroups(targets, serverNames)
+		groups = prepared.ServerGroups
 	}
 	v2ExplorerNormalizeGroup(groups)
 	selectedGroup := v2ExplorerSelectedGroup(groups)
-	filtered := v2ExplorerFilteredTargets(targets, selectedGroup, serverNames, states, v2RouteExplorer.search.Text(), v2RouteExplorer.attentionOnly)
+	filtered := v2CachedFilteredTargets(u, prepared, selectedGroup, v2RouteExplorer.search.Text(), v2RouteExplorer.attentionOnly)
 	v2ExplorerSelectionFallback(filtered, selectedGroup)
-	counts := v2ExplorerCounts(targets, states)
+	counts := prepared.Counts
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-		layout.Rigid(v2WorkspaceStatus(u, status, len(targets), len(toolBatches)+len(capBatches), len(reviews))),
+		layout.Rigid(v2WorkspaceStatus(u, status, len(targets), len(toolBatches)+len(capBatches), len(reviews), loading, loadErr)),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return v2ExplorerToolbar(u, gtx, hierarchyUsable, counts) }),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
@@ -188,12 +164,54 @@ func v2RoutingWorkspacePage(u *v2DesktopUI, gtx layout.Context) layout.Dimension
 	)
 }
 
+func v2RoutingWorkspaceLoading(u *v2DesktopUI, gtx layout.Context, loading bool, loadErr string) layout.Dimensions {
+	label := "LOADING"
+	bg, fg := uiAccentSoft, uiAccent
+	detail := "Reading and preparing routing data on a background worker. Window controls and other pages remain responsive."
+	if !loading && loadErr != "" {
+		label, bg, fg = "LOAD FAILED", uiDangerSoft, uiDanger
+		detail = "Routing data could not be loaded. The app will retry without blocking the UI."
+	}
+	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		if max := gtx.Dp(unit.Dp(620)); gtx.Constraints.Max.X > max {
+			gtx.Constraints.Max.X = max
+		}
+		return card(func(gtx layout.Context) layout.Dimensions {
+			rows := []layout.FlexChild{
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+						layout.Rigid(sectionTitle(u.th, "Routing workspace")),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Left: unit.Dp(9)}.Layout(gtx, pill(u.th, label, bg, fg)) }),
+					)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, mutedCaption(u.th, detail)) }),
+			}
+			if loadErr != "" {
+				rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Top: unit.Dp(7)}.Layout(gtx, faintCaption(u.th, loadErr))
+				}))
+			}
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
+		})(gtx)
+	})
+}
+
 func v2WorkspaceIndexActions(u *v2DesktopUI, gtx layout.Context) {
 	for u.indexRefresh.Clicked(gtx) {
-		u.async("refreshing index", func() error { _, err := u.core.IndexRefresh(context.Background()); return err })
+		u.runTask(
+			"routing-index",
+			"Refreshing routing index",
+			"Discovering tools, rebuilding routing metadata, and preparing local embeddings in the background.",
+			func() error { _, err := u.core.IndexRefresh(context.Background()); return err },
+		)
 	}
 	for u.indexCommit.Clicked(gtx) {
-		u.async("committing index", func() error { _, err := u.core.IndexCommit(context.Background()); return err })
+		u.runTask(
+			"routing-index",
+			"Committing routing index",
+			"Promoting the prepared routing generation in the background.",
+			func() error { _, err := u.core.IndexCommit(context.Background()); return err },
+		)
 	}
 	for v2RouteWorkspace.fit.Clicked(gtx) {
 		v2RouteWorkspace.needsFit = true
@@ -212,13 +230,13 @@ func v2WorkspacePreferenceActions(u *v2DesktopUI, gtx layout.Context, prefs core
 	}
 	for v2RoutingEditorState.addProfile.Clicked(gtx) {
 		name, desc, expected := strings.TrimSpace(v2RoutingEditorState.profileName.Text()), strings.TrimSpace(v2RoutingEditorState.profileDescription.Text()), prefs.PreferenceRevision
-		u.async("creating routing profile", func() error {
+		u.runTask("routing-preferences", "Creating routing profile", "Saving the routing profile in the background.", func() error {
 			_, err := u.core.PutRoutingProfile(context.Background(), expected, routingprefs.Profile{Name: name, Description: desc})
 			return err
 		})
 	}
 	for v2RoutingEditorState.clearDefault.Clicked(gtx) {
-		u.async("clearing default routing profile", func() error {
+		u.runTask("routing-preferences", "Clearing default routing profile", "Updating routing configuration in the background.", func() error {
 			cfg := u.core.ManagerConfig()
 			cfg.Routing.DefaultProfile = ""
 			return u.core.SaveManager(context.Background(), cfg)
@@ -260,13 +278,27 @@ func v2WorkspacePreferenceActions(u *v2DesktopUI, gtx layout.Context, prefs core
 			}
 		}
 		expected := prefs.PreferenceRevision
-		u.async("saving routing preference", func() error { _, err := u.core.PutRoutingRule(context.Background(), expected, spec); return err })
+		u.runTask("routing-preferences", "Saving routing preference", "Writing the routing preference in the background.", func() error {
+			_, err := u.core.PutRoutingRule(context.Background(), expected, spec)
+			return err
+		})
 	}
 }
 
-func v2WorkspaceStatus(u *v2DesktopUI, status indexing.Status, tools, agentTasks, reviews int) layout.Widget {
+func v2WorkspaceStatus(u *v2DesktopUI, status indexing.Status, tools, agentTasks, reviews int, loading bool, loadErr string) layout.Widget {
 	return card(func(gtx layout.Context) layout.Dimensions {
 		label, bg, fg, instruction := v2WorkspaceOverall(status, agentTasks, reviews)
+		meta := fmt.Sprintf("%d live tools · %d agent task(s) · %d optional review(s)", tools, agentTasks, reviews)
+		if loading {
+			meta += " · view updating in background"
+		}
+		if loadErr != "" {
+			meta += " · last background refresh failed"
+		}
+		refreshLabel, commitLabel := "Refresh", "Commit"
+		if u.taskActive("routing-index") {
+			refreshLabel, commitLabel = "Index task running…", "Index task running…"
+		}
 		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -279,13 +311,13 @@ func v2WorkspaceStatus(u *v2DesktopUI, status indexing.Status, tools, agentTasks
 						return layout.Inset{Top: unit.Dp(5)}.Layout(gtx, mutedCaption(u.th, instruction))
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, faintCaption(u.th, fmt.Sprintf("%d live tools · %d agent task(s) · %d optional review(s)", tools, agentTasks, reviews)))
+						return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, faintCaption(u.th, meta))
 					}),
 				)
 			}),
-			layout.Rigid(primaryButton(u.th, &u.indexRefresh, "Refresh")),
+			layout.Rigid(primaryButton(u.th, &u.indexRefresh, refreshLabel)),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
-			layout.Rigid(secondaryButton(u.th, &u.indexCommit, "Commit")),
+			layout.Rigid(secondaryButton(u.th, &u.indexCommit, commitLabel)),
 		)
 	})
 }

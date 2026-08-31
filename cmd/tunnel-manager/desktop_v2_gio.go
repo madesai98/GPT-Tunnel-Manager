@@ -85,6 +85,11 @@ func runDesktopV2(core *coreapp.V2App, setFocus func(func())) error {
 	ready := make(chan *v2DesktopUI, 1)
 	done := make(chan error, 1)
 	go func() {
+		// Keep Gio event handling and widget mutations on one dedicated OS
+		// thread. Potentially blocking application work is dispatched to worker
+		// goroutines by runTask instead of sharing this thread.
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
 		u := newV2DesktopUI(core)
 		ready <- u
 		done <- u.loop()
@@ -247,6 +252,9 @@ func (u *v2DesktopUI) runWindow() error {
 			u.requestExit()
 			return nil
 		case gioapp.FrameEvent:
+			// Apply worker results before laying out the next frame so Gio widget
+			// state is only mutated on the dedicated UI thread.
+			u.drainUI()
 			gtx := gioapp.NewContext(&ops, event)
 			u.layout(gtx)
 			event.Frame(gtx.Ops)
@@ -310,26 +318,7 @@ func (u *v2DesktopUI) shutdownNow() {
 }
 
 func (u *v2DesktopUI) async(label string, fn func() error) {
-	u.mu.Lock()
-	if u.busy || u.exiting {
-		u.mu.Unlock()
-		return
-	}
-	u.busy = true
-	u.message = label
-	u.mu.Unlock()
-	go func() {
-		err := fn()
-		u.mu.Lock()
-		u.busy = false
-		if err != nil {
-			u.message = err.Error()
-		} else if u.message == label {
-			u.message = "Done: " + label
-		}
-		u.mu.Unlock()
-		u.invalidate()
-	}()
+	u.runTask("", label, "", fn)
 }
 
 func (u *v2DesktopUI) setMessage(message string) {
@@ -411,6 +400,7 @@ func (u *v2DesktopUI) mainArea(gtx layout.Context) layout.Dimensions {
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(pageTitle(u.th, title)),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(18)}.Layout(gtx, mutedCaption(u.th, subtitle)) }),
+		layout.Rigid(u.activityPanel),
 		layout.Flexed(1, u.body),
 		layout.Rigid(u.footer),
 	)
