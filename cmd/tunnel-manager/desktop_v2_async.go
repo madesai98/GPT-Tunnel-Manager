@@ -48,7 +48,8 @@ type v2RoutingPrepared struct {
 type v2UIAsyncState struct {
 	mu sync.Mutex
 
-	tasks map[string]v2BackgroundTask
+	tasks       map[string]v2BackgroundTask
+	uiCallbacks []func()
 
 	routingWorkerOnce sync.Once
 	routingWake       chan struct{}
@@ -141,9 +142,9 @@ func (u *v2DesktopUI) runTask(key, label, detail string, fn func() error) bool {
 		}
 		u.mu.Unlock()
 
-		// Routing state can be affected by server lifecycle, settings, tool
-		// visibility, preference, index, and embedding operations. Refresh the
-		// cached workspace after any user action without ever blocking the UI.
+		// Server lifecycle, settings, visibility, preference, index, and
+		// embedding operations can all change routing state. Rebuild the cached
+		// workspace after a completed action without blocking the render loop.
 		v2RefreshRoutingSnapshot(u)
 		u.invalidate()
 	}()
@@ -168,6 +169,30 @@ func (u *v2DesktopUI) activeTasks() []v2BackgroundTask {
 	}
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].StartedAt.Before(tasks[j].StartedAt) })
 	return tasks
+}
+
+// postUI schedules a mutation of Gio/widget state for the next frame. Worker
+// goroutines should use this instead of touching editors or page state directly.
+func (u *v2DesktopUI) postUI(fn func()) {
+	if fn == nil {
+		return
+	}
+	state := v2AsyncStateFor(u)
+	state.mu.Lock()
+	state.uiCallbacks = append(state.uiCallbacks, fn)
+	state.mu.Unlock()
+	u.invalidate()
+}
+
+func (u *v2DesktopUI) drainUI() {
+	state := v2AsyncStateFor(u)
+	state.mu.Lock()
+	callbacks := append([]func(){}, state.uiCallbacks...)
+	state.uiCallbacks = nil
+	state.mu.Unlock()
+	for _, callback := range callbacks {
+		callback()
+	}
 }
 
 func v2TaskElapsed(start time.Time) string {
@@ -333,11 +358,14 @@ func v2LoadRoutingPrepared(u *v2DesktopUI) (v2RoutingPrepared, error) {
 	hierarchy, hierarchyFound, _ := u.core.RoutingCapabilityHierarchy(ctx)
 
 	sort.Slice(prefs.Profiles, func(i, j int) bool { return prefs.Profiles[i].Name < prefs.Profiles[j].Name })
+	// Keep the prepared target slice in the same order used by the explorer so
+	// search/filter changes are O(n) and do not re-sort thousands of tools on
+	// the UI thread.
 	sort.Slice(targets, func(i, j int) bool {
-		if targets[i].ServerID == targets[j].ServerID {
-			return targets[i].ToolName < targets[j].ToolName
+		if strings.EqualFold(targets[i].ToolName, targets[j].ToolName) {
+			return targets[i].ServerID < targets[j].ServerID
 		}
-		return targets[i].ServerID < targets[j].ServerID
+		return strings.ToLower(targets[i].ToolName) < strings.ToLower(targets[j].ToolName)
 	})
 
 	serverNames := map[string]string{}
@@ -382,7 +410,8 @@ func v2LoadRoutingPrepared(u *v2DesktopUI) (v2RoutingPrepared, error) {
 }
 
 func v2CachedFilteredTargets(u *v2DesktopUI, prepared v2RoutingPrepared, group v2RoutingExplorerGroup, query string, attentionOnly bool) []coreapp.V2RoutingTarget {
-	key := fmt.Sprintf("%d|%s|%t|%s", prepared.Revision, group.Key, attentionOnly, strings.ToLower(strings.TrimSpace(query)))
+	normalizedQuery := strings.ToLower(strings.TrimSpace(query))
+	key := fmt.Sprintf("%d|%s|%t|%s", prepared.Revision, group.Key, attentionOnly, normalizedQuery)
 	state := v2AsyncStateFor(u)
 	state.mu.Lock()
 	if state.filterKey == key {
@@ -392,7 +421,26 @@ func v2CachedFilteredTargets(u *v2DesktopUI, prepared v2RoutingPrepared, group v
 	}
 	state.mu.Unlock()
 
-	filtered := v2ExplorerFilteredTargets(prepared.Targets, group, prepared.ServerNames, prepared.States, query, attentionOnly)
+	filtered := make([]coreapp.V2RoutingTarget, 0, len(prepared.Targets))
+	for _, target := range prepared.Targets {
+		targetKey := v2RoutingTargetKey(target)
+		if group.Key != "all" && !group.Members[targetKey] {
+			continue
+		}
+		item := prepared.States[targetKey]
+		if attentionOnly && !v2ExplorerNeedsAttention(target, item) {
+			continue
+		}
+		if normalizedQuery != "" {
+			serverName := prepared.ServerNames[target.ServerID]
+			haystack := strings.ToLower(target.ToolName + " " + target.ServerID + " " + serverName + " " + item.agent + " " + item.preference)
+			if !strings.Contains(haystack, normalizedQuery) {
+				continue
+			}
+		}
+		filtered = append(filtered, target)
+	}
+
 	state.mu.Lock()
 	state.filterKey = key
 	state.filtered = filtered
