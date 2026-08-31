@@ -48,7 +48,6 @@ type v2DesktopUI struct {
 	settingsScroll layout.List
 
 	serversNav  widget.Clickable
-	indexNav    widget.Clickable
 	routingNav  widget.Clickable
 	settingsNav widget.Clickable
 	logsNav     widget.Clickable
@@ -357,7 +356,6 @@ func (u *v2DesktopUI) layout(gtx layout.Context) layout.Dimensions {
 
 func (u *v2DesktopUI) sidebar(gtx layout.Context) layout.Dimensions {
 	for u.serversNav.Clicked(gtx) { u.page = "servers" }
-	for u.indexNav.Clicked(gtx) { u.page = "index" }
 	for u.routingNav.Clicked(gtx) { u.page = "routing" }
 	for u.settingsNav.Clicked(gtx) { u.page = "settings"; u.loadSettings() }
 	for u.logsNav.Clicked(gtx) { u.page = "logs" }
@@ -377,8 +375,6 @@ func (u *v2DesktopUI) sidebar(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(mutedCaption(u.th, "MANAGER · V2 ROUTER")),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(26)}.Layout(gtx) }),
 			layout.Rigid(navButton(u.th, &u.serversNav, "Servers", u.page == "servers")),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(6)}.Layout(gtx) }),
-			layout.Rigid(navButton(u.th, &u.indexNav, "Index", u.page == "index")),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(6)}.Layout(gtx) }),
 			layout.Rigid(navButton(u.th, &u.routingNav, "Routing", u.page == "routing")),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(6)}.Layout(gtx) }),
@@ -408,8 +404,7 @@ func (u *v2DesktopUI) mainArea(gtx layout.Context) layout.Dimensions {
 	}
 	title, subtitle := "Servers", "Manage downstream MCP runtimes through the router-native lifecycle."
 	switch u.page {
-	case "index": title, subtitle = "Index", "Build and promote the routing catalog for the current routing state."
-	case "routing": title, subtitle = "Routing", "Manage routing profiles, preference revisions, and review state."
+	case "routing": title, subtitle = "Routing", "Inspect the live tool graph, build and promote the routing index, and manage routing preferences."
 	case "settings": title, subtitle = "Settings", "Configure local Manager protection, tunnel exposure, local embeddings, and native behavior."
 	case "logs": title, subtitle = "Logs", "Filter, inspect, clear, and export structured v2 runtime logs."
 	}
@@ -460,7 +455,6 @@ func (u *v2DesktopUI) exitDialog(gtx layout.Context) layout.Dimensions {
 
 func (u *v2DesktopUI) body(gtx layout.Context) layout.Dimensions {
 	switch u.page {
-	case "index": return u.indexPage(gtx)
 	case "routing": return u.routingPage(gtx)
 	case "settings": return u.settingsPage(gtx)
 	case "logs": return u.logsPage(gtx)
@@ -469,7 +463,6 @@ func (u *v2DesktopUI) body(gtx layout.Context) layout.Dimensions {
 }
 
 func (u *v2DesktopUI) serversPage(gtx layout.Context) layout.Dimensions { return v2ServersPage(u, gtx) }
-func (u *v2DesktopUI) indexPage(gtx layout.Context) layout.Dimensions { return v2IndexPage(u, gtx) }
 func (u *v2DesktopUI) routingPage(gtx layout.Context) layout.Dimensions { return v2RoutingPage(u, gtx) }
 
 func editorSurface(th *material.Theme, editor *widget.Editor, hint string) layout.Widget {

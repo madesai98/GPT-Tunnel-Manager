@@ -88,33 +88,49 @@ func v2RoutingWorkspacePage(u *v2DesktopUI, gtx layout.Context) layout.Dimension
 	capBatches, _ := u.core.PendingEnrichment(ctx, catalog.BatchCapabilityReconciliation, 100)
 	reviews, _ := u.core.PendingEnrichment(ctx, catalog.BatchAmbiguityReview, 100)
 	hierarchy, hierarchyFound, _ := u.core.RoutingCapabilityHierarchy(ctx)
-	v2WorkspaceIndexActions(u, gtx, hierarchyFound)
-	v2WorkspacePreferenceActions(u, gtx, prefs, targets)
 
 	serverNames := map[string]string{}
 	for _, entry := range u.core.Entries() {
 		serverNames[entry.ID] = entry.Name
 	}
 	states := v2WorkspaceStates(prefs.Rules, toolBatches, capBatches)
+	liveDrift := false
+	for _, target := range targets {
+		if target.AssumptionFingerprint != "" {
+			continue
+		}
+		liveDrift = true
+		key := v2RoutingTargetKey(target)
+		s := states[key]
+		if s.agent == "" && !s.needsReview && s.preference == "" {
+			s.preference = "NEW · REFRESH INDEX"
+		}
+		states[key] = s
+	}
+	hierarchyUsable := hierarchyFound && !liveDrift
+
+	v2WorkspaceIndexActions(u, gtx, hierarchyUsable)
+	v2WorkspacePreferenceActions(u, gtx, prefs, targets)
+
 	if v2RouteWorkspace.view == "" {
-		if hierarchyFound {
+		if hierarchyUsable {
 			v2RouteWorkspace.view = "capabilities"
 		} else {
 			v2RouteWorkspace.view = "sources"
 		}
 	}
-	if !hierarchyFound && v2RouteWorkspace.view == "capabilities" {
+	if !hierarchyUsable && v2RouteWorkspace.view == "capabilities" {
 		v2RouteWorkspace.view = "sources"
 	}
 	var nodes []v2RouteGraphNode
 	var edges []v2RouteGraphEdge
 	var bounds image.Rectangle
-	if hierarchyFound && v2RouteWorkspace.view == "capabilities" {
+	if hierarchyUsable && v2RouteWorkspace.view == "capabilities" {
 		nodes, edges, bounds = v2WorkspaceCapabilityGraph(targets, serverNames, states, hierarchy, status)
 	} else {
 		nodes, edges, bounds = v2WorkspaceServerGraph(targets, serverNames, states, status)
 	}
-	sig := fmt.Sprintf("%s|%s|%d|%d", status.ActiveGenerationID, status.StagingGenerationID, len(targets), status.PendingRequired)
+	sig := fmt.Sprintf("%s|%s|%d|%d|%t", status.ActiveGenerationID, status.StagingGenerationID, len(targets), status.PendingRequired, liveDrift)
 	if sig != v2RouteWorkspace.signature {
 		v2RouteWorkspace.signature, v2RouteWorkspace.needsFit = sig, true
 	}
@@ -126,15 +142,15 @@ func v2RoutingWorkspacePage(u *v2DesktopUI, gtx layout.Context) layout.Dimension
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			if gtx.Constraints.Max.X < gtx.Dp(unit.Dp(760)) {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-					layout.Flexed(.56, v2WorkspaceGraph(u, nodes, edges, bounds, hierarchyFound)),
+					layout.Flexed(.56, v2WorkspaceGraph(u, nodes, edges, bounds, hierarchyUsable)),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(10)}.Layout(gtx) }),
-					layout.Flexed(.44, v2WorkspaceInspector(u, prefs, targets, states, hierarchy, hierarchyFound, status, toolBatches, capBatches, reviews)),
+					layout.Flexed(.44, v2WorkspaceInspector(u, prefs, targets, states, hierarchy, hierarchyUsable, status, toolBatches, capBatches, reviews)),
 				)
 			}
 			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
-				layout.Flexed(.62, v2WorkspaceGraph(u, nodes, edges, bounds, hierarchyFound)),
+				layout.Flexed(.62, v2WorkspaceGraph(u, nodes, edges, bounds, hierarchyUsable)),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(12)}.Layout(gtx) }),
-				layout.Flexed(.38, v2WorkspaceInspector(u, prefs, targets, states, hierarchy, hierarchyFound, status, toolBatches, capBatches, reviews)),
+				layout.Flexed(.38, v2WorkspaceInspector(u, prefs, targets, states, hierarchy, hierarchyUsable, status, toolBatches, capBatches, reviews)),
 			)
 		}),
 	)
@@ -205,6 +221,9 @@ func v2WorkspacePreferenceActions(u *v2DesktopUI, gtx layout.Context, prefs core
 	for v2RoutingEditorState.addRule.Clicked(gtx) {
 		spec := routingprefs.RuleSpec{ProfileID: v2RoutingProfileID(prefs.Profiles), Specificity: v2RoutingEditorState.specificity, SubjectKey: strings.TrimSpace(v2RoutingEditorState.subject.Text()), Condition: strings.TrimSpace(v2RoutingEditorState.condition.Text())}
 		for _, target := range targets {
+			if target.AssumptionFingerprint == "" {
+				continue
+			}
 			choice := v2RoutingEditorState.targetChoices[v2RoutingTargetKey(target)]
 			if choice == nil {
 				continue
@@ -228,7 +247,7 @@ func v2WorkspaceStatus(u *v2DesktopUI, status indexing.Status, tools, agentTasks
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Flex{Alignment: layout.Middle}.Layout(gtx, layout.Rigid(sectionTitle(u.th, "Index & Routing")), layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Alignment: layout.Middle}.Layout(gtx, layout.Rigid(sectionTitle(u.th, "Routing")), layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return layout.Inset{Left: unit.Dp(9)}.Layout(gtx, pill(u.th, label, bg, fg))
 						}))
 					}),
@@ -236,7 +255,7 @@ func v2WorkspaceStatus(u *v2DesktopUI, status indexing.Status, tools, agentTasks
 						return layout.Inset{Top: unit.Dp(5)}.Layout(gtx, mutedCaption(u.th, instruction))
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, faintCaption(u.th, fmt.Sprintf("%d tools · %d agent task(s) · %d optional review(s)", tools, agentTasks, reviews)))
+						return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, faintCaption(u.th, fmt.Sprintf("%d live tools · %d agent task(s) · %d optional review(s)", tools, agentTasks, reviews)))
 					}),
 				)
 			}),
@@ -259,6 +278,8 @@ func v2WorkspaceOverall(status indexing.Status, agentTasks, reviews int) (string
 		return "READY", uiSuccessSoft, uiSuccess, "Good to go. Human ambiguity reviews are optional and do not block routing."
 	case status.Ready:
 		return "READY", uiSuccessSoft, uiSuccess, "Good to go. The active routing index is current."
+	case status.ActiveGenerationID != "":
+		return "REFRESH NEEDED", uiWarningSoft, uiWarning, "You: the live routing state changed. Refresh the index to incorporate the current tool contract."
 	default:
 		return "CHECK INDEX", uiWarningSoft, uiWarning, "The routing catalog needs attention."
 	}

@@ -47,11 +47,23 @@ func v2WorkspaceSelection(u *v2DesktopUI, targets []coreapp.V2RoutingTarget, sta
 			for _, target := range targets {
 				if v2RoutingTargetKey(target) == key {
 					s := states[key]
-					return layout.Flex{Axis: layout.Vertical}.Layout(gtx, layout.Rigid(sectionTitle(u.th, target.ToolName)), layout.Rigid(mutedCaption(u.th, target.ServerID)), layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, pill(u.th, v2WorkspaceToolLabel(s, status.Ready), v2WorkspaceStateBG(s), v2WorkspaceStateFG(s)))
-					}), layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, faintCaption(u.th, "Routing preferences are an overlay; they do not modify the tool contract or semantic index."))
-					}))
+					rows := []layout.FlexChild{
+						layout.Rigid(sectionTitle(u.th, target.ToolName)),
+						layout.Rigid(mutedCaption(u.th, target.ServerID)),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, pill(u.th, v2WorkspaceToolLabel(s, status.Ready), v2WorkspaceStateBG(s), v2WorkspaceStateFG(s)))
+						}),
+					}
+					if target.AssumptionFingerprint == "" {
+						rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, faintCaption(u.th, "This tool is present in the live downstream contract but is not in the current routing generation yet. Refresh the index before assigning routing preferences."))
+						}))
+					} else {
+						rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, faintCaption(u.th, "Routing preferences are an overlay; they do not modify the tool contract or semantic index."))
+						}))
+					}
+					return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
 				}
 			}
 		}
@@ -77,26 +89,43 @@ func v2WorkspaceSelection(u *v2DesktopUI, targets []coreapp.V2RoutingTarget, sta
 		if strings.HasPrefix(selected, "server:") {
 			id := strings.TrimPrefix(selected, "server:")
 			keys := []string{}
+			total := 0
 			for _, target := range targets {
-				if target.ServerID == id {
+				if target.ServerID != id {
+					continue
+				}
+				total++
+				if target.AssumptionFingerprint != "" {
 					keys = append(keys, v2RoutingTargetKey(target))
 				}
 			}
 			v2WorkspaceGroupActions(gtx, keys)
-			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, layout.Rigid(sectionTitle(u.th, id)), layout.Rigid(mutedCaption(u.th, fmt.Sprintf("Server group · %d tools", len(keys)))), layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(9)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{}.Layout(gtx, layout.Rigid(secondaryButton(u.th, &v2RouteWorkspace.preferAll, "Prefer all")), layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(5)}.Layout(gtx) }), layout.Rigid(secondaryButton(u.th, &v2RouteWorkspace.lowerAll, "Lower all")), layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(5)}.Layout(gtx) }), layout.Rigid(secondaryButton(u.th, &v2RouteWorkspace.clearAll, "Clear")))
-				})
-			}))
+			rows := []layout.FlexChild{
+				layout.Rigid(sectionTitle(u.th, id)),
+				layout.Rigid(mutedCaption(u.th, fmt.Sprintf("Server group · %d live tools · %d indexed", total, len(keys)))),
+			}
+			if len(keys) > 0 {
+				rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Top: unit.Dp(9)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{}.Layout(gtx, layout.Rigid(secondaryButton(u.th, &v2RouteWorkspace.preferAll, "Prefer indexed")), layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(5)}.Layout(gtx) }), layout.Rigid(secondaryButton(u.th, &v2RouteWorkspace.lowerAll, "Lower indexed")), layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(5)}.Layout(gtx) }), layout.Rigid(secondaryButton(u.th, &v2RouteWorkspace.clearAll, "Clear")))
+					})
+				}))
+			}
+			if total > len(keys) {
+				rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, faintCaption(u.th, fmt.Sprintf("%d live tool(s) need an index refresh before they can participate in routing preferences.", total-len(keys))))
+				}))
+			}
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
 		}
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, layout.Rigid(sectionTitle(u.th, "Routing catalog")), layout.Rigid(mutedCaption(u.th, fmt.Sprintf("%d authoritative tools", len(targets)))), layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, faintCaption(u.th, "The graph mirrors the actual source hierarchy: catalog → server → authoritative tool. Click any node to inspect it."))
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, layout.Rigid(sectionTitle(u.th, "Routing catalog")), layout.Rigid(mutedCaption(u.th, fmt.Sprintf("%d live tools", len(targets)))), layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, faintCaption(u.th, "The source graph follows the current downstream tool contract. New live tools appear immediately and are marked for index refresh until they are incorporated into a routing generation."))
 		}))
 	})
 }
 
 func v2WorkspaceStateBG(s v2RouteToolState) color.NRGBA {
-	if s.agent != "" {
+	if s.agent != "" || s.preference == "NEW · REFRESH INDEX" {
 		return uiWarningSoft
 	}
 	if s.needsReview {
@@ -108,7 +137,7 @@ func v2WorkspaceStateBG(s v2RouteToolState) color.NRGBA {
 	return uiSuccessSoft
 }
 func v2WorkspaceStateFG(s v2RouteToolState) color.NRGBA {
-	if s.agent != "" {
+	if s.agent != "" || s.preference == "NEW · REFRESH INDEX" {
 		return uiWarning
 	}
 	if s.needsReview {
@@ -154,6 +183,9 @@ func v2WorkspacePreferenceBuilder(u *v2DesktopUI, prefs coreapp.V2PreferenceSnap
 	return card(func(gtx layout.Context) layout.Dimensions {
 		preferred, lower := 0, 0
 		for _, target := range targets {
+			if target.AssumptionFingerprint == "" {
+				continue
+			}
 			c := v2WorkspaceChoice(v2RoutingTargetKey(target))
 			if c.preferred.Value {
 				preferred++
@@ -181,15 +213,23 @@ func v2WorkspacePreferenceBuilder(u *v2DesktopUI, prefs coreapp.V2PreferenceSnap
 		}
 		key := strings.TrimPrefix(v2RouteWorkspace.selected, "tool:")
 		for _, target := range targets {
-			if v2RoutingTargetKey(target) == key {
+			if v2RoutingTargetKey(target) != key {
+				continue
+			}
+			rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, mutedCaption(u.th, "Selected tool: "+target.ToolName))
+			}))
+			if target.AssumptionFingerprint == "" {
+				rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Top: unit.Dp(5)}.Layout(gtx, faintCaption(u.th, "Refresh the index before adding this live tool to a preference draft."))
+				}))
+			} else {
 				c := v2WorkspaceChoice(key)
 				rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, mutedCaption(u.th, "Selected tool: "+target.ToolName))
-				}), layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{}.Layout(gtx, layout.Rigid(material.CheckBox(u.th, &c.preferred, "Preferred").Layout), layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }), layout.Rigid(material.CheckBox(u.th, &c.deprioritized, "Lower priority").Layout))
 				}))
-				break
 			}
+			break
 		}
 		rows = append(rows,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -198,7 +238,7 @@ func v2WorkspacePreferenceBuilder(u *v2DesktopUI, prefs coreapp.V2PreferenceSnap
 		)
 		if preferred == 0 {
 			rows = append(rows, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, faintCaption(u.th, "Select at least one preferred tool before saving."))
+				return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, faintCaption(u.th, "Select at least one indexed preferred tool before saving."))
 			}))
 		}
 		rows = append(rows,
