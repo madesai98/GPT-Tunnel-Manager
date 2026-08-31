@@ -18,7 +18,6 @@ import (
 
 	coreapp "github.com/madesai98/GPT-Tunnel-Manager/internal/app"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/catalog"
-	"github.com/madesai98/GPT-Tunnel-Manager/internal/enrichment"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/indexing"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/routingprefs"
 )
