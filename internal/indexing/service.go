@@ -191,7 +191,7 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 			status.NextAction = "The active index is ready. Optional ambiguity_review batches remain and may be processed without rebuilding or re-promoting the generation."
 		}
 	}
-	return status, nil
+	return s.applyDirtyStatus(ctx, status)
 }
 
 func statePending(states []EnrichmentKindState, kind catalog.EnrichmentBatchKind) int {
@@ -224,27 +224,7 @@ func (s *Service) Refresh(ctx context.Context) (RefreshResult, error) {
 	if !ready || hash == "" {
 		return RefreshResult{}, &Error{Code: "index_required", Message: "routing state is not ready for indexing"}
 	}
-	if _, err := s.catalog.ReconcileStaging(ctx, hash); err != nil {
-		return RefreshResult{}, err
-	}
-	generation, err := s.stagingForHash(ctx, hash)
-	if errors.Is(err, sql.ErrNoRows) {
-		generation, err = s.catalog.CreateStaging(ctx, catalog.GenerationSpec{RoutingStateHash: hash})
-	}
-	if err != nil {
-		return RefreshResult{}, err
-	}
-	if err := s.populateBaseIndex(ctx, generation.ID); err != nil {
-		return RefreshResult{}, err
-	}
-	if _, err := s.enrichment.PrepareToolEnrichment(ctx, generation.ID); err != nil {
-		return RefreshResult{}, err
-	}
-	status, err := s.Status(ctx)
-	if err != nil {
-		return RefreshResult{}, err
-	}
-	return RefreshResult{Status: status}, nil
+	return s.refreshLocked(ctx, hash)
 }
 
 func (s *Service) GetBatch(ctx context.Context, kind catalog.EnrichmentBatchKind, limit int) ([]catalog.EnrichmentBatch, error) {
