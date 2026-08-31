@@ -64,6 +64,7 @@ var v2RouteWorkspace struct {
 
 func v2RoutingWorkspacePage(u *v2DesktopUI, gtx layout.Context) layout.Dimensions {
 	ensureV2RoutingEditor()
+	v2ExplorerEnsure()
 	ctx := context.Background()
 	status, err := u.core.IndexStatus(ctx)
 	if err != nil {
@@ -109,54 +110,85 @@ func v2RoutingWorkspacePage(u *v2DesktopUI, gtx layout.Context) layout.Dimension
 	}
 	hierarchyUsable := hierarchyFound && !liveDrift
 
-	v2WorkspaceIndexActions(u, gtx, hierarchyUsable)
+	v2WorkspaceIndexActions(u, gtx)
 	v2WorkspacePreferenceActions(u, gtx, prefs, targets)
 
-	if v2RouteWorkspace.view == "" {
-		if hierarchyUsable {
-			v2RouteWorkspace.view = "capabilities"
-		} else {
-			v2RouteWorkspace.view = "sources"
-		}
+	if !hierarchyUsable && v2RouteExplorer.groupBy == "capabilities" {
+		v2RouteExplorer.groupBy = "servers"
+		v2RouteExplorer.selectedGroup = "all"
+		v2RouteWorkspace.selected = "catalog"
 	}
-	if !hierarchyUsable && v2RouteWorkspace.view == "capabilities" {
-		v2RouteWorkspace.view = "sources"
-	}
-	var nodes []v2RouteGraphNode
-	var edges []v2RouteGraphEdge
-	var bounds image.Rectangle
-	if hierarchyUsable && v2RouteWorkspace.view == "capabilities" {
-		nodes, edges, bounds = v2WorkspaceCapabilityGraph(targets, serverNames, states, hierarchy, status)
+	var groups []v2RoutingExplorerGroup
+	if hierarchyUsable && v2RouteExplorer.groupBy == "capabilities" {
+		groups = v2ExplorerCapabilityGroups(targets, hierarchy)
 	} else {
-		nodes, edges, bounds = v2WorkspaceServerGraph(targets, serverNames, states, status)
+		groups = v2ExplorerServerGroups(targets, serverNames)
 	}
-	sig := fmt.Sprintf("%s|%s|%d|%d|%t", status.ActiveGenerationID, status.StagingGenerationID, len(targets), status.PendingRequired, liveDrift)
-	if sig != v2RouteWorkspace.signature {
-		v2RouteWorkspace.signature, v2RouteWorkspace.needsFit = sig, true
-	}
-	v2WorkspaceSelectDefault(nodes, states)
+	v2ExplorerNormalizeGroup(groups)
+	selectedGroup := v2ExplorerSelectedGroup(groups)
+	filtered := v2ExplorerFilteredTargets(targets, selectedGroup, serverNames, states, v2RouteExplorer.search.Text(), v2RouteExplorer.attentionOnly)
+	v2ExplorerSelectionFallback(filtered, selectedGroup)
+	counts := v2ExplorerCounts(targets, states)
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(v2WorkspaceStatus(u, status, len(targets), len(toolBatches)+len(capBatches), len(reviews))),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return v2ExplorerToolbar(u, gtx, hierarchyUsable, counts) }),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(12)}.Layout(gtx) }),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			if gtx.Constraints.Max.X < gtx.Dp(unit.Dp(760)) {
-				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-					layout.Flexed(.56, v2WorkspaceGraph(u, nodes, edges, bounds, hierarchyUsable)),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(10)}.Layout(gtx) }),
-					layout.Flexed(.44, v2WorkspaceInspector(u, prefs, targets, states, hierarchy, hierarchyUsable, status, toolBatches, capBatches, reviews)),
+			inspector := v2WorkspaceInspector(u, prefs, targets, states, hierarchy, hierarchyUsable, status, toolBatches, capBatches, reviews)
+			if v2RouteExplorer.graph {
+				if gtx.Constraints.Max.X < gtx.Dp(unit.Dp(760)) {
+					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+						layout.Flexed(.58, func(gtx layout.Context) layout.Dimensions { return v2ExplorerGraphPane(u, gtx, targets, groups, serverNames, states, hierarchy, hierarchyUsable, status) }),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(10)}.Layout(gtx) }),
+						layout.Flexed(.42, inspector),
+					)
+				}
+				return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+					layout.Flexed(.66, func(gtx layout.Context) layout.Dimensions { return v2ExplorerGraphPane(u, gtx, targets, groups, serverNames, states, hierarchy, hierarchyUsable, status) }),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(12)}.Layout(gtx) }),
+					layout.Flexed(.34, inspector),
 				)
 			}
-			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
-				layout.Flexed(.62, v2WorkspaceGraph(u, nodes, edges, bounds, hierarchyUsable)),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(12)}.Layout(gtx) }),
-				layout.Flexed(.38, v2WorkspaceInspector(u, prefs, targets, states, hierarchy, hierarchyUsable, status, toolBatches, capBatches, reviews)),
-			)
+
+			groupPane := v2ExplorerGroupPane(u, groups)
+			toolPane := v2ExplorerToolPane(u, filtered, len(targets), serverNames, states, status.Ready)
+			switch {
+			case gtx.Constraints.Max.X >= gtx.Dp(unit.Dp(920)):
+				return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+					layout.Flexed(.23, groupPane),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(10)}.Layout(gtx) }),
+					layout.Flexed(.43, toolPane),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(10)}.Layout(gtx) }),
+					layout.Flexed(.34, inspector),
+				)
+			case gtx.Constraints.Max.X >= gtx.Dp(unit.Dp(700)):
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Flexed(.56, func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+							layout.Flexed(.31, groupPane),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(10)}.Layout(gtx) }),
+							layout.Flexed(.69, toolPane),
+						)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(10)}.Layout(gtx) }),
+					layout.Flexed(.44, inspector),
+				)
+			default:
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Flexed(.25, groupPane),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(8)}.Layout(gtx) }),
+					layout.Flexed(.35, toolPane),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(8)}.Layout(gtx) }),
+					layout.Flexed(.40, inspector),
+				)
+			}
 		}),
 	)
 }
 
-func v2WorkspaceIndexActions(u *v2DesktopUI, gtx layout.Context, hierarchyFound bool) {
+func v2WorkspaceIndexActions(u *v2DesktopUI, gtx layout.Context) {
 	for u.indexRefresh.Clicked(gtx) {
 		u.async("refreshing index", func() error { _, err := u.core.IndexRefresh(context.Background()); return err })
 	}
@@ -171,14 +203,6 @@ func v2WorkspaceIndexActions(u *v2DesktopUI, gtx layout.Context, hierarchyFound 
 	}
 	for v2RouteWorkspace.zoomOut.Clicked(gtx) {
 		v2RouteWorkspace.zoom = max(float32(.3), max(float32(.3), v2RouteWorkspace.zoom)/1.18)
-	}
-	for v2RouteWorkspace.viewNext.Clicked(gtx) {
-		if hierarchyFound && v2RouteWorkspace.view == "sources" {
-			v2RouteWorkspace.view = "capabilities"
-		} else {
-			v2RouteWorkspace.view = "sources"
-		}
-		v2RouteWorkspace.needsFit = true
 	}
 }
 
