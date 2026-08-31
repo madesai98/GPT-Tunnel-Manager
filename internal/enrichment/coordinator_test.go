@@ -193,7 +193,7 @@ func TestAcceptedToolBatchCanRepairMaterializationAfterEmbeddingFailure(t *testi
 	}
 }
 
-func TestSemanticNeighborhoodMembershipChangeInvalidatesReusableEnrichment(t *testing.T) {
+func TestSemanticNeighborhoodMembershipChangeReusesUnchangedToolEnrichment(t *testing.T) {
 	ctx := context.Background()
 	cat, err := catalog.Open(ctx, t.TempDir())
 	if err != nil {
@@ -242,24 +242,14 @@ func TestSemanticNeighborhoodMembershipChangeInvalidatesReusableEnrichment(t *te
 	}
 	pending, ok, err := coordinator.GetBatch(ctx, "gen2", catalog.BatchToolEnrichment)
 	if err != nil || !ok {
-		t.Fatalf("changed neighborhood incorrectly reused all enrichment: batch=%#v ok=%v err=%v", pending, ok, err)
+		t.Fatalf("new tool did not produce required enrichment batch: batch=%#v ok=%v err=%v", pending, ok, err)
 	}
 	var request ToolBatchRequest
 	if err := json.Unmarshal(pending.RequestJSON, &request); err != nil {
 		t.Fatal(err)
 	}
-	found := false
-	for _, item := range request.Items {
-		if item.Tool.MemberKey != "srv/a" {
-			continue
-		}
-		found = true
-		if len(item.Neighbors) != 1 || item.Neighbors[0].MemberKey != "srv/c" {
-			t.Fatalf("new neighborhood for srv/a = %#v", item.Neighbors)
-		}
-	}
-	if !found {
-		t.Fatal("srv/a was not invalidated by semantic-neighborhood membership change")
+	if len(request.Items) != 1 || request.Items[0].Tool.MemberKey != "srv/c" {
+		t.Fatalf("pending enrichment after neighborhood churn = %#v, want only new tool srv/c", request.Items)
 	}
 }
 

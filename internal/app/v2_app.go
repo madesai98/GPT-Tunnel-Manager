@@ -175,16 +175,11 @@ func NewV2App(parent context.Context, root string) (*V2App, error) {
 				a.product.logDownstream(line.ServerID, line.Stream, line.Text)
 			}
 		},
-		OnToolContractChanged: func(serverID string) {
-			if err := c.MarkDirty(context.Background(), "server:"+serverID, "live downstream tool contract changed", ""); err == nil {
-				_, _ = tracker.AdvanceRoutingRevision(context.Background())
-			}
-		},
 	})
 	if err != nil {
 		return fail(err)
 	}
-	lifecycleService, err := routedlifecycle.New(ctx, manager, serversConfig, routedlifecycle.ConnectWithFactory(factory), routedlifecycle.Options{})
+	lifecycleService, err := routedlifecycle.New(ctx, manager, serversConfig, connectWithPersistentToolIdentity(factory, c, tracker), routedlifecycle.Options{})
 	if err != nil {
 		return fail(err)
 	}
