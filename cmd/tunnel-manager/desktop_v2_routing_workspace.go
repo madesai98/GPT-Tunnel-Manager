@@ -129,13 +129,13 @@ func v2RoutingWorkspacePage(u *v2DesktopUI, gtx layout.Context) layout.Dimension
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 					layout.Flexed(.56, v2WorkspaceGraph(u, nodes, edges, bounds, hierarchyFound)),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Height: unit.Dp(10)}.Layout(gtx) }),
-					layout.Flexed(.44, v2WorkspaceInspector(u, prefs, targets, states, hierarchy, hierarchyFound, toolBatches, capBatches, reviews)),
+					layout.Flexed(.44, v2WorkspaceInspector(u, prefs, targets, states, hierarchy, hierarchyFound, status, toolBatches, capBatches, reviews)),
 				)
 			}
 			return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 				layout.Flexed(.62, v2WorkspaceGraph(u, nodes, edges, bounds, hierarchyFound)),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(12)}.Layout(gtx) }),
-				layout.Flexed(.38, v2WorkspaceInspector(u, prefs, targets, states, hierarchy, hierarchyFound, toolBatches, capBatches, reviews)),
+				layout.Flexed(.38, v2WorkspaceInspector(u, prefs, targets, states, hierarchy, hierarchyFound, status, toolBatches, capBatches, reviews)),
 			)
 		}),
 	)
