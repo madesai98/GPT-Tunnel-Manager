@@ -69,20 +69,21 @@ func neighborhoodFingerprint(work ToolWork) (string, error) {
 	return toolcontract.FingerprintJSON(body), nil
 }
 
+// toolArtifactSpec deliberately excludes neighborhood membership from the
+// reusable semantic identity. Neighbors are first-pass context for the agent,
+// not part of the tool itself. Once guidance has been accepted for an exact
+// canonical tool contract it remains reusable until that contract or protocol
+// changes, even if other tools temporarily disappear or later reappear.
 func toolArtifactSpec(work ToolWork) catalog.RequiredArtifactSpec {
-	dependencies := []catalog.ArtifactDependency{
-		{Key: "enrichment.protocol", Fingerprint: fingerprintText(ToolEnrichmentProtocolVersion)},
-		{Key: "source.self", Fingerprint: work.Tool.SourceFingerprint},
-	}
-	for _, neighbor := range work.Neighbors {
-		dependencies = append(dependencies, catalog.ArtifactDependency{Key: "source.neighbor:" + neighbor.MemberKey, Fingerprint: neighbor.SourceFingerprint})
-	}
 	return catalog.RequiredArtifactSpec{
-		Role:               RoleToolEnrichment,
-		MemberKey:          work.Tool.MemberKey,
-		Kind:               ToolEnrichmentArtifactKind,
-		Dependencies:       dependencies,
-		ContextFingerprint: work.NeighborhoodContextFingerprint,
+		Role:      RoleToolEnrichment,
+		MemberKey: work.Tool.MemberKey,
+		Kind:      ToolEnrichmentArtifactKind,
+		Dependencies: []catalog.ArtifactDependency{
+			{Key: "enrichment.protocol", Fingerprint: fingerprintText(ToolEnrichmentProtocolVersion)},
+			{Key: "source.self", Fingerprint: work.Tool.SourceFingerprint},
+		},
+		ContextFingerprint: "",
 	}
 }
 
@@ -92,8 +93,7 @@ func enrichedEmbeddingGate(work ToolWork, identity embedding.Identity) (string, 
 		Projection string `json:"projection"`
 		Provider   string `json:"provider"`
 		Source     string `json:"source"`
-		Context    string `json:"context"`
-	}{EnrichedProjectionVersion, identity.Fingerprint(), work.Tool.SourceFingerprint, work.NeighborhoodContextFingerprint})
+	}{EnrichedProjectionVersion, identity.Fingerprint(), work.Tool.SourceFingerprint})
 	return key, toolcontract.FingerprintJSON(body)
 }
 
