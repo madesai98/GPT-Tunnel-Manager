@@ -84,22 +84,12 @@ func (c *Catalog) ObserveServerTools(ctx context.Context, serverID string, tools
 		return rollback(fmt.Errorf("inspect tool cache baseline for %s: %w", serverID, err))
 	}
 
-	// Upgrade compatibility: seed the new persistent cache from the current
-	// authoritative generation before interpreting a partial live snapshot.
-	// This ensures the first launch after upgrading cannot forget tools merely
-	// because the paired application is closed at that moment.
+	// Upgrade compatibility: seed the new persistent cache from authoritative
+	// generation data before interpreting a partial live snapshot. Prefer the
+	// newest staging contract because it can be newer than active, then fill any
+	// missing tools from active. This prevents an upgrade while the paired app is
+	// closed from discarding either staged changes or previously active tools.
 	now := time.Now().UTC().UnixMilli()
-	if _, err := tx.ExecContext(ctx, `
-		INSERT OR IGNORE INTO tool_contract_cache(
-			server_id, tool_name, source_fingerprint, contract_json, available, last_seen_at_unix_ms
-		)
-		SELECT st.server_id, st.tool_name, st.source_fingerprint, st.contract_json, 1, ?
-		FROM source_tools st
-		JOIN generations g ON g.generation_id = st.generation_id
-		WHERE st.server_id = ? AND g.status = 'active'
-	`, now, serverID); err != nil {
-		return rollback(fmt.Errorf("seed active tool cache for %s: %w", serverID, err))
-	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO tool_contract_cache(
 			server_id, tool_name, source_fingerprint, contract_json, available, last_seen_at_unix_ms
@@ -111,6 +101,17 @@ func (c *Catalog) ObserveServerTools(ctx context.Context, serverID string, tools
 		ORDER BY g.created_at_unix_ms DESC
 	`, now, serverID); err != nil {
 		return rollback(fmt.Errorf("seed staging tool cache for %s: %w", serverID, err))
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO tool_contract_cache(
+			server_id, tool_name, source_fingerprint, contract_json, available, last_seen_at_unix_ms
+		)
+		SELECT st.server_id, st.tool_name, st.source_fingerprint, st.contract_json, 1, ?
+		FROM source_tools st
+		JOIN generations g ON g.generation_id = st.generation_id
+		WHERE st.server_id = ? AND g.status = 'active'
+	`, now, serverID); err != nil {
+		return rollback(fmt.Errorf("seed active tool cache for %s: %w", serverID, err))
 	}
 
 	type storedTool struct {
