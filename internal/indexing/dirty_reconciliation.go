@@ -2,6 +2,8 @@ package indexing
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -54,11 +56,13 @@ func (s *Service) refreshLocked(ctx context.Context, hash string) (RefreshResult
 	}
 
 	generation, err := s.stagingForHash(ctx, hash)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		generation, err = s.catalog.CreateStaging(ctx, catalog.GenerationSpec{RoutingStateHash: hash})
 		if err != nil {
 			return RefreshResult{}, err
 		}
+	} else if err != nil {
+		return RefreshResult{}, err
 	} else {
 		changed, compareErr := s.stagingSourcesChanged(ctx, generation.ID, snapshots)
 		if compareErr != nil {
@@ -103,7 +107,7 @@ func (s *Service) acquireIndexSnapshots(ctx context.Context) (map[string]downstr
 		}
 		lease, err := s.lifecycle.Acquire(ctx, entry.ID)
 		if err != nil {
-			if strings.Contains(err.Error(), routedlifecycle.ErrManualServerStopped.Error()) {
+			if errors.Is(err, routedlifecycle.ErrManualServerStopped) {
 				return nil, &Error{Code: CodeManualServerStoppedForIndex, Message: fmt.Sprintf("manual server %s is stopped and must be started before indexing", entry.ID), cause: err}
 			}
 			return nil, err
