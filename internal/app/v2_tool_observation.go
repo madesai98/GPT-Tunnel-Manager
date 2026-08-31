@@ -51,13 +51,14 @@ func connectWithPersistentToolIdentity(factory *downstream.Factory, c *catalog.C
 			}
 		}
 		wrapped := &persistentToolSession{
-			session:               session,
-			entry:                 entry,
-			effective:             effective,
-			catalog:               c,
-			tracker:               tracker,
+			session:                session,
+			entry:                  entry,
+			effective:              effective,
+			catalog:                c,
+			tracker:                tracker,
 			initialLiveFingerprint: live.Fingerprint,
-			observerDone:          make(chan struct{}),
+			lastObservedFingerprint: live.Fingerprint,
+			observerDone:           make(chan struct{}),
 		}
 		wrapped.watchLiveToolChanges()
 		return wrapped, nil
@@ -72,6 +73,8 @@ type persistentToolSession struct {
 	tracker   *routingstate.Tracker
 
 	initialLiveFingerprint string
+	observedMu             sync.Mutex
+	lastObservedFingerprint string
 	observerDone           chan struct{}
 	observerClose          sync.Once
 }
@@ -93,7 +96,8 @@ func (s *persistentToolSession) CurrentTools() downstream.ToolSnapshot {
 	}
 	// CurrentTools is used by lifecycle/UI state. Reconcile opportunistically in
 	// addition to the notification watcher so polling-only callers also update
-	// availability without forcing a semantic reindex.
+	// availability without forcing a semantic reindex. Exact duplicate snapshots
+	// are suppressed by observeLiveSnapshot.
 	_ = s.observeLiveSnapshot(filtered)
 	return filtered
 }
@@ -181,19 +185,27 @@ func (s *persistentToolSession) observeLiveSnapshot(snapshot downstream.ToolSnap
 	if s == nil || s.catalog == nil {
 		return nil
 	}
+	s.observedMu.Lock()
+	defer s.observedMu.Unlock()
+	if snapshot.Fingerprint == s.lastObservedFingerprint {
+		return nil
+	}
 	ctx := context.Background()
 	observation, err := s.catalog.ObserveServerTools(ctx, s.entry.ID, snapshot.Tools)
 	if err != nil {
 		return err
 	}
-	if !observation.SemanticChanged {
-		return nil
+	if observation.SemanticChanged {
+		effective, err := cachedSemanticSnapshot(ctx, s.catalog, s.entry)
+		if err != nil {
+			return err
+		}
+		if err := markSemanticToolChange(ctx, s.catalog, s.tracker, s.entry, effective.Fingerprint); err != nil {
+			return err
+		}
 	}
-	effective, err := cachedSemanticSnapshot(ctx, s.catalog, s.entry)
-	if err != nil {
-		return err
-	}
-	return markSemanticToolChange(ctx, s.catalog, s.tracker, s.entry, effective.Fingerprint)
+	s.lastObservedFingerprint = snapshot.Fingerprint
+	return nil
 }
 
 func markSemanticToolChange(ctx context.Context, c *catalog.Catalog, tracker *routingstate.Tracker, entry v2config.ServerEntry, fingerprint string) error {
