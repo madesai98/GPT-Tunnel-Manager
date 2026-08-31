@@ -7,7 +7,7 @@ import (
 	"fmt"
 )
 
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 var (
 	ErrCatalogCorrupt            = errors.New("catalog is corrupt")
@@ -76,6 +76,18 @@ CREATE TABLE source_tools (
     FOREIGN KEY (generation_id, server_id, tool_name)
         REFERENCES generation_members(generation_id, server_id, tool_name) ON DELETE CASCADE
 );
+
+CREATE TABLE tool_contract_cache (
+    server_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    source_fingerprint TEXT NOT NULL,
+    contract_json BLOB NOT NULL,
+    available INTEGER NOT NULL DEFAULT 1 CHECK (available IN (0, 1)),
+    last_seen_at_unix_ms INTEGER NOT NULL,
+    PRIMARY KEY (server_id, tool_name)
+);
+CREATE INDEX tool_contract_cache_available
+ON tool_contract_cache(server_id, available, tool_name);
 
 CREATE TABLE dirty_partitions (
     partition_key TEXT PRIMARY KEY,
@@ -238,12 +250,27 @@ CREATE TABLE IF NOT EXISTS continuation_mappings (
 );
 `
 
+const migrationV4SQL = `
+CREATE TABLE IF NOT EXISTS tool_contract_cache (
+    server_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    source_fingerprint TEXT NOT NULL,
+    contract_json BLOB NOT NULL,
+    available INTEGER NOT NULL DEFAULT 1 CHECK (available IN (0, 1)),
+    last_seen_at_unix_ms INTEGER NOT NULL,
+    PRIMARY KEY (server_id, tool_name)
+);
+CREATE INDEX IF NOT EXISTS tool_contract_cache_available
+ON tool_contract_cache(server_id, available, tool_name);
+`
+
 var requiredTables = []string{
 	"routing_state",
 	"generations",
 	"source_servers",
 	"generation_members",
 	"source_tools",
+	"tool_contract_cache",
 	"dirty_partitions",
 	"generation_dependencies",
 	"artifacts",
@@ -292,6 +319,12 @@ func ensureSchema(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 		version = 3
+	}
+	if version == 3 {
+		if err := applySchemaStep(ctx, db, migrationV4SQL, 4, "migrate catalog schema to v4"); err != nil {
+			return err
+		}
+		version = 4
 	}
 	if version != SchemaVersion {
 		return fmt.Errorf("%w: unsupported catalog schema version %d", ErrCatalogCorrupt, version)
