@@ -151,6 +151,22 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (SearchOutput, 
 	if len(sources) == 0 {
 		return SearchOutput{GenerationID: generation.ID, EffectiveProfile: profile, PreferenceRevision: preferenceRevision, Results: []SearchResult{}}, nil
 	}
+	availableByKey := make(map[string]bool, len(sources))
+	unavailableCount := 0
+	for _, source := range sources {
+		available, known, err := s.catalog.ToolAvailability(ctx, source.ServerID, source.ToolName, source.SourceFingerprint)
+		if err != nil {
+			return SearchOutput{}, err
+		}
+		key := enrichment.MemberKey(source.ServerID, source.ToolName)
+		availableByKey[key] = !known || available
+		if known && !available {
+			unavailableCount++
+		}
+	}
+	if unavailableCount == len(sources) {
+		return SearchOutput{GenerationID: generation.ID, EffectiveProfile: profile, PreferenceRevision: preferenceRevision, Results: []SearchResult{}}, nil
+	}
 	guidance, err := s.loadGuidance(ctx, generation.ID)
 	if err != nil {
 		return SearchOutput{}, err
@@ -185,8 +201,8 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (SearchOutput, 
 		return SearchOutput{}, fmt.Errorf("embed search query: %w", err)
 	}
 	depth := s.options.CandidateDepth
-	if depth < limit {
-		depth = limit
+	if minimum := limit + unavailableCount; depth < minimum {
+		depth = minimum
 	}
 	if depth > len(sources) {
 		depth = len(sources)
@@ -250,6 +266,9 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (SearchOutput, 
 
 	candidates := make([]candidate, 0, len(fused))
 	for _, item := range fused {
+		if !availableByKey[item.Key] {
+			continue
+		}
 		source, ok := sourceByKey[item.Key]
 		if !ok {
 			return SearchOutput{}, fmt.Errorf("%w: fused result %s has no authoritative source", ErrIndexRequired, item.Key)
@@ -364,6 +383,13 @@ func (s *Service) GetTool(ctx context.Context, input GetToolInput) (GetToolOutpu
 		}
 	}
 	if source == nil || source.SourceFingerprint != claims.SourceFingerprint {
+		return GetToolOutput{}, ErrInvalidToolReference
+	}
+	available, known, err := s.catalog.ToolAvailability(ctx, source.ServerID, source.ToolName, source.SourceFingerprint)
+	if err != nil {
+		return GetToolOutput{}, err
+	}
+	if known && !available {
 		return GetToolOutput{}, ErrInvalidToolReference
 	}
 	server, err := s.catalog.SourceServer(ctx, generation.ID, source.ServerID)
