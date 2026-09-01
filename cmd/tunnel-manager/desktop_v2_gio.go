@@ -106,8 +106,15 @@ func runDesktopV2(core *coreapp.V2App, setFocus func(func())) error {
 	}()
 	go func() {
 		err := <-done
+		cleanupErr := core.Close()
 		close(u.trayStop)
 		systray.Quit()
+		if cleanupErr != nil {
+			fmt.Fprintln(os.Stderr, "desktop cleanup:", cleanupErr)
+			if err == nil {
+				err = cleanupErr
+			}
+		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "desktop:", err)
 			os.Exit(1)
