@@ -33,22 +33,62 @@ type ToolObservationResult struct {
 	AvailabilityChanged bool
 }
 
+type observedToolContract struct {
+	name                string
+	fingerprint         string
+	semanticFingerprint string
+	body                []byte
+}
+
+type authoritativeToolContracts struct {
+	active  *observedToolContract
+	staging *observedToolContract
+}
+
+func observedContract(tool *mcp.Tool) (observedToolContract, error) {
+	fingerprint, body, err := toolcontract.FingerprintTool(tool)
+	if err != nil {
+		return observedToolContract{}, err
+	}
+	semanticFingerprint, _, err := toolcontract.SemanticFingerprintJSON(body)
+	if err != nil {
+		return observedToolContract{}, err
+	}
+	return observedToolContract{
+		name:                tool.Name,
+		fingerprint:         fingerprint,
+		semanticFingerprint: semanticFingerprint,
+		body:                body,
+	}, nil
+}
+
+func storedContract(name, fingerprint string, body []byte) (observedToolContract, error) {
+	semanticFingerprint, _, err := toolcontract.SemanticFingerprintJSON(body)
+	if err != nil {
+		return observedToolContract{}, err
+	}
+	return observedToolContract{
+		name:                name,
+		fingerprint:         fingerprint,
+		semanticFingerprint: semanticFingerprint,
+		body:                append([]byte(nil), body...),
+	}, nil
+}
+
 // ObserveServerTools records the currently advertised tools for one server.
 // Missing tools are marked unavailable, never deleted. A tool only counts as a
 // semantic change when an authoritative active/staging generation already
-// exists and a tool is new or its canonical contract fingerprint changed.
+// exists and a tool is new or its stable semantic contract changed. Known
+// transport-only presentation decoration (currently WebMCP browser source
+// labels) is ignored for that comparison, and the last authoritative exact
+// contract is retained so enrichment artifacts remain reusable.
 func (c *Catalog) ObserveServerTools(ctx context.Context, serverID string, tools []*mcp.Tool) (ToolObservationResult, error) {
 	serverID = strings.TrimSpace(serverID)
 	if serverID == "" {
 		return ToolObservationResult{}, errors.New("server id is required")
 	}
 
-	type observedTool struct {
-		name        string
-		fingerprint string
-		body        []byte
-	}
-	observed := make(map[string]observedTool, len(tools))
+	observed := make(map[string]observedToolContract, len(tools))
 	for _, tool := range tools {
 		if tool == nil || strings.TrimSpace(tool.Name) == "" {
 			return ToolObservationResult{}, errors.New("observed tool requires a name")
@@ -56,11 +96,11 @@ func (c *Catalog) ObserveServerTools(ctx context.Context, serverID string, tools
 		if _, exists := observed[tool.Name]; exists {
 			return ToolObservationResult{}, fmt.Errorf("duplicate observed tool name %q", tool.Name)
 		}
-		fingerprint, body, err := toolcontract.FingerprintTool(tool)
+		contract, err := observedContract(tool)
 		if err != nil {
 			return ToolObservationResult{}, err
 		}
-		observed[tool.Name] = observedTool{name: tool.Name, fingerprint: fingerprint, body: body}
+		observed[tool.Name] = contract
 	}
 
 	tx, err := c.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
@@ -84,11 +124,10 @@ func (c *Catalog) ObserveServerTools(ctx context.Context, serverID string, tools
 		return rollback(fmt.Errorf("inspect tool cache baseline for %s: %w", serverID, err))
 	}
 
-	// Upgrade compatibility: seed the new persistent cache from authoritative
+	// Upgrade compatibility: seed the persistent cache from authoritative
 	// generation data before interpreting a partial live snapshot. Prefer the
-	// newest staging contract because it can be newer than active, then fill any
-	// missing tools from active. This prevents an upgrade while the paired app is
-	// closed from discarding either staged changes or previously active tools.
+	// newest staging contract for tools not already cached, then fill any missing
+	// tools from active. Existing cache entries are reconciled against both below.
 	now := time.Now().UTC().UnixMilli()
 	if _, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO tool_contract_cache(
@@ -115,12 +154,12 @@ func (c *Catalog) ObserveServerTools(ctx context.Context, serverID string, tools
 	}
 
 	type storedTool struct {
-		fingerprint string
-		available   bool
+		contract  observedToolContract
+		available bool
 	}
 	stored := make(map[string]storedTool)
 	rows, err := tx.QueryContext(ctx, `
-		SELECT tool_name, source_fingerprint, available
+		SELECT tool_name, source_fingerprint, contract_json, available
 		FROM tool_contract_cache WHERE server_id = ?
 	`, serverID)
 	if err != nil {
@@ -128,12 +167,18 @@ func (c *Catalog) ObserveServerTools(ctx context.Context, serverID string, tools
 	}
 	for rows.Next() {
 		var name, fingerprint string
+		var body []byte
 		var available int
-		if err := rows.Scan(&name, &fingerprint, &available); err != nil {
+		if err := rows.Scan(&name, &fingerprint, &body, &available); err != nil {
 			rows.Close()
 			return rollback(fmt.Errorf("scan tool cache for %s: %w", serverID, err))
 		}
-		stored[name] = storedTool{fingerprint: fingerprint, available: available != 0}
+		contract, err := storedContract(name, fingerprint, body)
+		if err != nil {
+			rows.Close()
+			return rollback(fmt.Errorf("normalize cached tool %s/%s: %w", serverID, name, err))
+		}
+		stored[name] = storedTool{contract: contract, available: available != 0}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -141,10 +186,73 @@ func (c *Catalog) ObserveServerTools(ctx context.Context, serverID string, tools
 	}
 	rows.Close()
 
+	// Load the authoritative exact contracts separately. If a live tool is
+	// semantically identical to active/staging but only its WebMCP source label
+	// changed, retaining the authoritative bytes keeps the original source
+	// fingerprint and all content-addressed enrichment artifacts reusable. Active
+	// is preferred when both active and staging normalize to the same semantics;
+	// this also repairs false-positive staging generations created by older builds.
+	authoritative := make(map[string]authoritativeToolContracts)
+	rows, err = tx.QueryContext(ctx, `
+		SELECT st.tool_name, st.source_fingerprint, st.contract_json, g.status
+		FROM source_tools st
+		JOIN generations g ON g.generation_id = st.generation_id
+		WHERE st.server_id = ? AND g.status IN ('active', 'staging')
+		ORDER BY g.created_at_unix_ms DESC, g.generation_id DESC
+	`, serverID)
+	if err != nil {
+		return rollback(fmt.Errorf("load authoritative tool contracts for %s: %w", serverID, err))
+	}
+	for rows.Next() {
+		var name, fingerprint, status string
+		var body []byte
+		if err := rows.Scan(&name, &fingerprint, &body, &status); err != nil {
+			rows.Close()
+			return rollback(fmt.Errorf("scan authoritative tool contract for %s: %w", serverID, err))
+		}
+		contract, err := storedContract(name, fingerprint, body)
+		if err != nil {
+			rows.Close()
+			return rollback(fmt.Errorf("normalize authoritative tool %s/%s: %w", serverID, name, err))
+		}
+		set := authoritative[name]
+		switch GenerationStatus(status) {
+		case GenerationActive:
+			if set.active == nil {
+				copy := contract
+				set.active = &copy
+			}
+		case GenerationStaging:
+			if set.staging == nil {
+				copy := contract
+				set.staging = &copy
+			}
+		}
+		authoritative[name] = set
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return rollback(fmt.Errorf("iterate authoritative tool contracts for %s: %w", serverID, err))
+	}
+	rows.Close()
+
 	result := ToolObservationResult{}
 	for name, tool := range observed {
 		previous, existed := stored[name]
-		if authoritativeBaseline != 0 && (!existed || previous.fingerprint != tool.fingerprint) {
+		set := authoritative[name]
+		matchesAuthoritative := false
+		canonical := tool
+		if set.active != nil && set.active.semanticFingerprint == tool.semanticFingerprint {
+			canonical = *set.active
+			matchesAuthoritative = true
+		} else if set.staging != nil && set.staging.semanticFingerprint == tool.semanticFingerprint {
+			canonical = *set.staging
+			matchesAuthoritative = true
+		} else if existed && previous.contract.semanticFingerprint == tool.semanticFingerprint {
+			canonical = previous.contract
+		}
+
+		if authoritativeBaseline != 0 && !matchesAuthoritative && (!existed || previous.contract.semanticFingerprint != tool.semanticFingerprint) {
 			result.SemanticChanged = true
 		}
 		if !existed || !previous.available {
@@ -159,7 +267,7 @@ func (c *Catalog) ObserveServerTools(ctx context.Context, serverID string, tools
 				contract_json = excluded.contract_json,
 				available = 1,
 				last_seen_at_unix_ms = excluded.last_seen_at_unix_ms
-		`, serverID, name, tool.fingerprint, tool.body, now); err != nil {
+		`, serverID, name, canonical.fingerprint, canonical.body, now); err != nil {
 			return rollback(fmt.Errorf("store observed tool %s/%s: %w", serverID, name, err))
 		}
 	}
