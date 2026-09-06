@@ -64,11 +64,13 @@ func connectWithPersistentToolIdentity(factory *downstream.Factory, c *catalog.C
 }
 
 type persistentToolSession struct {
-	session   *downstream.Session
-	entry     v2config.ServerEntry
-	effective downstream.ToolSnapshot
-	catalog   *catalog.Catalog
-	tracker   *routingstate.Tracker
+	session *downstream.Session
+	entry   v2config.ServerEntry
+	catalog *catalog.Catalog
+	tracker *routingstate.Tracker
+
+	effectiveMu sync.RWMutex
+	effective   downstream.ToolSnapshot
 
 	observedMu              sync.Mutex
 	lastObservedFingerprint string
@@ -80,7 +82,19 @@ func (s *persistentToolSession) InitialTools() downstream.ToolSnapshot {
 	if s == nil {
 		return downstream.ToolSnapshot{}
 	}
-	return s.effective.Clone()
+	s.effectiveMu.RLock()
+	effective := s.effective
+	s.effectiveMu.RUnlock()
+	return effective.Clone()
+}
+
+func (s *persistentToolSession) setEffectiveTools(snapshot downstream.ToolSnapshot) {
+	if s == nil {
+		return
+	}
+	s.effectiveMu.Lock()
+	s.effective = snapshot.Clone()
+	s.effectiveMu.Unlock()
 }
 
 func (s *persistentToolSession) CurrentTools() downstream.ToolSnapshot {
@@ -194,6 +208,7 @@ func (s *persistentToolSession) observeLiveSnapshot(snapshot downstream.ToolSnap
 		if err != nil {
 			return err
 		}
+		s.setEffectiveTools(effective)
 		if err := markSemanticToolChange(ctx, s.catalog, s.tracker, s.entry, effective.Fingerprint); err != nil {
 			return err
 		}
