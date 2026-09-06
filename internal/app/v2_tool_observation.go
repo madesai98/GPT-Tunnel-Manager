@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/catalog"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/downstream"
@@ -51,14 +50,13 @@ func connectWithPersistentToolIdentity(factory *downstream.Factory, c *catalog.C
 			}
 		}
 		wrapped := &persistentToolSession{
-			session:                session,
-			entry:                  entry,
-			effective:              effective,
-			catalog:                c,
-			tracker:                tracker,
-			initialLiveFingerprint: live.Fingerprint,
+			session:                 session,
+			entry:                   entry,
+			effective:               effective,
+			catalog:                 c,
+			tracker:                 tracker,
 			lastObservedFingerprint: live.Fingerprint,
-			observerDone:           make(chan struct{}),
+			observerDone:            make(chan struct{}),
 		}
 		wrapped.watchLiveToolChanges()
 		return wrapped, nil
@@ -72,11 +70,10 @@ type persistentToolSession struct {
 	catalog   *catalog.Catalog
 	tracker   *routingstate.Tracker
 
-	initialLiveFingerprint string
-	observedMu             sync.Mutex
+	observedMu              sync.Mutex
 	lastObservedFingerprint string
-	observerDone           chan struct{}
-	observerClose          sync.Once
+	observerDone            chan struct{}
+	observerClose           sync.Once
 }
 
 func (s *persistentToolSession) InitialTools() downstream.ToolSnapshot {
@@ -140,10 +137,9 @@ func (s *persistentToolSession) CallTool(ctx context.Context, params *mcp.CallTo
 	}
 	result, err := s.session.CallTool(ctx, params)
 	if errors.Is(err, downstream.ErrToolContractChanged) {
-		// Availability has already been reconciled from the refreshed live
-		// snapshot. The lifecycle reconnects before the next acquire so a real
-		// semantic contract change gets a fresh authoritative session snapshot.
-		return nil, fmt.Errorf("%w: downstream tool availability changed; reconnect required", downstream.ErrDownstreamUnavailable)
+		// Static servers that do not advertise tools/list_changed still fail
+		// closed on unexpected contract drift and reconnect on the next acquire.
+		return nil, fmt.Errorf("%w: downstream tool contract changed; reconnect required", downstream.ErrDownstreamUnavailable)
 	}
 	return result, err
 }
@@ -152,23 +148,21 @@ func (s *persistentToolSession) watchLiveToolChanges() {
 	if s == nil || s.session == nil || s.observerDone == nil {
 		return
 	}
+	changes := s.session.ToolChanges()
+	if changes == nil {
+		return
+	}
 	go func() {
-		ticker := time.NewTicker(50 * time.Millisecond)
-		defer ticker.Stop()
 		for {
 			select {
 			case <-s.observerDone:
 				return
-			case <-ticker.C:
-				if !s.session.ToolContractChanged() {
-					continue
-				}
+			case <-changes:
 				filtered, err := filterExposedTools(s.session.CurrentTools(), s.entry)
-				if err != nil || filtered.Fingerprint == s.initialLiveFingerprint {
+				if err != nil {
 					continue
 				}
 				_ = s.observeLiveSnapshot(filtered)
-				return
 			}
 		}
 	}()
