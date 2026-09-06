@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/color"
 	"strings"
+	"time"
 
 	"gioui.org/f32"
 	"gioui.org/io/pointer"
@@ -53,6 +54,8 @@ var v2RouteWorkspace struct {
 	zoomIn    widget.Clickable
 	zoomOut   widget.Clickable
 	clear     widget.Clickable
+	clearIndex widget.Clickable
+	clearIndexConfirmUntil time.Time
 	preferAll widget.Clickable
 	lowerAll  widget.Clickable
 	clearAll  widget.Clickable
@@ -198,6 +201,7 @@ func v2RoutingWorkspaceLoading(u *v2DesktopUI, gtx layout.Context, loading bool,
 
 func v2WorkspaceIndexActions(u *v2DesktopUI, gtx layout.Context) {
 	for u.indexRefresh.Clicked(gtx) {
+		v2RouteWorkspace.clearIndexConfirmUntil = time.Time{}
 		u.runTask(
 			"routing-index",
 			"Refreshing routing index",
@@ -206,11 +210,29 @@ func v2WorkspaceIndexActions(u *v2DesktopUI, gtx layout.Context) {
 		)
 	}
 	for u.indexCommit.Clicked(gtx) {
+		v2RouteWorkspace.clearIndexConfirmUntil = time.Time{}
 		u.runTask(
 			"routing-index",
 			"Committing routing index",
 			"Promoting the prepared routing generation in the background.",
 			func() error { _, err := u.core.IndexCommit(context.Background()); return err },
+		)
+	}
+	for v2RouteWorkspace.clearIndex.Clicked(gtx) {
+		if u.taskActive("routing-index") {
+			continue
+		}
+		if !v2RouteWorkspace.clearIndexConfirmUntil.After(time.Now()) {
+			v2RouteWorkspace.clearIndexConfirmUntil = time.Now().Add(8 * time.Second)
+			u.setMessage("Clear Index deletes all generated routing index data and semantic caches. Click Confirm Clear within 8 seconds to continue.")
+			continue
+		}
+		v2RouteWorkspace.clearIndexConfirmUntil = time.Time{}
+		u.runTask(
+			"routing-index",
+			"Clearing routing index",
+			"Deleting active and staging generations plus cached tool contracts, enrichments, and embeddings. Routing preferences are preserved.",
+			func() error { return u.core.IndexClear(context.Background()) },
 		)
 	}
 	for v2RouteWorkspace.fit.Clicked(gtx) {
@@ -295,9 +317,12 @@ func v2WorkspaceStatus(u *v2DesktopUI, status indexing.Status, tools, agentTasks
 		if loadErr != "" {
 			meta += " · last background refresh failed"
 		}
-		refreshLabel, commitLabel := "Refresh", "Commit"
+		refreshLabel, commitLabel, clearLabel := "Refresh", "Commit", "Clear Index"
+		if v2RouteWorkspace.clearIndexConfirmUntil.After(time.Now()) {
+			clearLabel = "Confirm Clear"
+		}
 		if u.taskActive("routing-index") {
-			refreshLabel, commitLabel = "Index task running…", "Index task running…"
+			refreshLabel, commitLabel, clearLabel = "Index task running…", "Index task running…", "Index task running…"
 		}
 		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
@@ -315,6 +340,8 @@ func v2WorkspaceStatus(u *v2DesktopUI, status indexing.Status, tools, agentTasks
 					}),
 				)
 			}),
+			layout.Rigid(dangerButton(u.th, &v2RouteWorkspace.clearIndex, clearLabel)),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
 			layout.Rigid(primaryButton(u.th, &u.indexRefresh, refreshLabel)),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Spacer{Width: unit.Dp(7)}.Layout(gtx) }),
 			layout.Rigid(secondaryButton(u.th, &u.indexCommit, commitLabel)),
