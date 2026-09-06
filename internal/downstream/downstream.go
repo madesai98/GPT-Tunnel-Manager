@@ -45,10 +45,10 @@ type Options struct {
 	HTTPTransport http.RoundTripper
 	Log           func(LogLine)
 
-	// OnToolContractChanged is diagnostic/invalidation plumbing for the later
-	// catalog/router phases. It is called at most once per session as soon as a
-	// reliable tools/list change notification arrives or fingerprint drift is
-	// observed.
+	// OnToolContractChanged is diagnostic/invalidation plumbing for unexpected
+	// contract drift. Protocol-level tools/list_changed notifications are normal
+	// for dynamic MCP servers and refresh the live inventory without invalidating
+	// an otherwise healthy session.
 	OnToolContractChanged func(serverID string)
 
 	ManagedHTTPRetryInterval time.Duration
@@ -91,6 +91,7 @@ type Session struct {
 	currentMu sync.RWMutex
 	current   ToolSnapshot
 	refreshMu sync.Mutex
+	toolChanges chan struct{}
 
 	supportsToolListChanged bool
 	toolContractChanged     *atomic.Bool
@@ -120,19 +121,10 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 	notifyOnce := &sync.Once{}
 	callbacks := &callbackState{}
 	var liveSession atomic.Pointer[Session]
-	markChanged := func() {
-		changed.Store(true)
-		notifyOnce.Do(func() {
-			if f.onToolChanged != nil {
-				safeServerCallback(f.onToolChanged, server.ID)
-			}
-		})
-	}
 	makeClient := func() (*mcp.Client, error) {
 		opts := cloneClientOptions(f.clientOptions)
 		previous := opts.ToolListChangedHandler
 		opts.ToolListChangedHandler = func(callbackCtx context.Context, req *mcp.ToolListChangedRequest) {
-			markChanged()
 			if session := liveSession.Load(); session != nil {
 				session.refreshToolsAsync(callbackCtx)
 			}
@@ -228,6 +220,7 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 		sdk:                     sdkSession,
 		initial:                 initial,
 		current:                 initial,
+		toolChanges:             make(chan struct{}, 1),
 		supportsToolListChanged: supportsChanged,
 		toolContractChanged:     changed,
 		notifyOnce:              notifyOnce,
@@ -238,7 +231,9 @@ func (f *Factory) Connect(ctx context.Context, server v2config.ServerEntry) (*Se
 		shutdown:                server.ShutdownTimeout(),
 	}
 	liveSession.Store(s)
-	if changed.Load() {
+	if supportsChanged {
+		// Close the small startup race where a list_changed notification can
+		// arrive after the initial snapshot but before liveSession is published.
 		s.refreshToolsAsync(context.Background())
 	}
 	return s, nil
@@ -266,8 +261,15 @@ func (s *Session) setCurrentTools(snapshot ToolSnapshot) {
 		return
 	}
 	s.currentMu.Lock()
+	changed := s.current.Fingerprint != snapshot.Fingerprint
 	s.current = snapshot.Clone()
 	s.currentMu.Unlock()
+	if changed && s.toolChanges != nil {
+		select {
+		case s.toolChanges <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (s *Session) refreshToolsAsync(parent context.Context) {
@@ -293,6 +295,13 @@ func (s *Session) refreshToolsAsync(parent context.Context) {
 func (s *Session) SupportsToolListChanged() bool { return s.supportsToolListChanged }
 
 func (s *Session) ToolContractChanged() bool { return s.toolContractChanged.Load() }
+
+func (s *Session) ToolChanges() <-chan struct{} {
+	if s == nil {
+		return nil
+	}
+	return s.toolChanges
+}
 
 func (s *Session) Done() <-chan struct{} { return s.processDone }
 
@@ -333,7 +342,7 @@ func (s *Session) CallTool(ctx context.Context, params *mcp.CallToolParams) (*mc
 	}
 	if s.toolContractChanged.Load() {
 		s.markToolContractChanged()
-		return nil, fmt.Errorf("%w: server %s advertised a tools/list change", ErrToolContractChanged, s.serverID)
+		return nil, fmt.Errorf("%w: server %s tool contract changed", ErrToolContractChanged, s.serverID)
 	}
 	if !s.supportsToolListChanged {
 		if err := s.RevalidateTools(ctx); err != nil {

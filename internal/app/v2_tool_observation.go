@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/catalog"
 	"github.com/madesai98/GPT-Tunnel-Manager/internal/downstream"
@@ -51,14 +50,13 @@ func connectWithPersistentToolIdentity(factory *downstream.Factory, c *catalog.C
 			}
 		}
 		wrapped := &persistentToolSession{
-			session:                session,
-			entry:                  entry,
-			effective:              effective,
-			catalog:                c,
-			tracker:                tracker,
-			initialLiveFingerprint: live.Fingerprint,
+			session:                 session,
+			entry:                   entry,
+			effective:               effective,
+			catalog:                 c,
+			tracker:                 tracker,
 			lastObservedFingerprint: live.Fingerprint,
-			observerDone:           make(chan struct{}),
+			observerDone:            make(chan struct{}),
 		}
 		wrapped.watchLiveToolChanges()
 		return wrapped, nil
@@ -66,24 +64,37 @@ func connectWithPersistentToolIdentity(factory *downstream.Factory, c *catalog.C
 }
 
 type persistentToolSession struct {
-	session   *downstream.Session
-	entry     v2config.ServerEntry
-	effective downstream.ToolSnapshot
-	catalog   *catalog.Catalog
-	tracker   *routingstate.Tracker
+	session *downstream.Session
+	entry   v2config.ServerEntry
+	catalog *catalog.Catalog
+	tracker *routingstate.Tracker
 
-	initialLiveFingerprint string
-	observedMu             sync.Mutex
+	effectiveMu sync.RWMutex
+	effective   downstream.ToolSnapshot
+
+	observedMu              sync.Mutex
 	lastObservedFingerprint string
-	observerDone           chan struct{}
-	observerClose          sync.Once
+	observerDone            chan struct{}
+	observerClose           sync.Once
 }
 
 func (s *persistentToolSession) InitialTools() downstream.ToolSnapshot {
 	if s == nil {
 		return downstream.ToolSnapshot{}
 	}
-	return s.effective.Clone()
+	s.effectiveMu.RLock()
+	effective := s.effective
+	s.effectiveMu.RUnlock()
+	return effective.Clone()
+}
+
+func (s *persistentToolSession) setEffectiveTools(snapshot downstream.ToolSnapshot) {
+	if s == nil {
+		return
+	}
+	s.effectiveMu.Lock()
+	s.effective = snapshot.Clone()
+	s.effectiveMu.Unlock()
 }
 
 func (s *persistentToolSession) CurrentTools() downstream.ToolSnapshot {
@@ -140,10 +151,9 @@ func (s *persistentToolSession) CallTool(ctx context.Context, params *mcp.CallTo
 	}
 	result, err := s.session.CallTool(ctx, params)
 	if errors.Is(err, downstream.ErrToolContractChanged) {
-		// Availability has already been reconciled from the refreshed live
-		// snapshot. The lifecycle reconnects before the next acquire so a real
-		// semantic contract change gets a fresh authoritative session snapshot.
-		return nil, fmt.Errorf("%w: downstream tool availability changed; reconnect required", downstream.ErrDownstreamUnavailable)
+		// Static servers that do not advertise tools/list_changed still fail
+		// closed on unexpected contract drift and reconnect on the next acquire.
+		return nil, fmt.Errorf("%w: downstream tool contract changed; reconnect required", downstream.ErrDownstreamUnavailable)
 	}
 	return result, err
 }
@@ -152,23 +162,21 @@ func (s *persistentToolSession) watchLiveToolChanges() {
 	if s == nil || s.session == nil || s.observerDone == nil {
 		return
 	}
+	changes := s.session.ToolChanges()
+	if changes == nil {
+		return
+	}
 	go func() {
-		ticker := time.NewTicker(50 * time.Millisecond)
-		defer ticker.Stop()
 		for {
 			select {
 			case <-s.observerDone:
 				return
-			case <-ticker.C:
-				if !s.session.ToolContractChanged() {
-					continue
-				}
+			case <-changes:
 				filtered, err := filterExposedTools(s.session.CurrentTools(), s.entry)
-				if err != nil || filtered.Fingerprint == s.initialLiveFingerprint {
+				if err != nil {
 					continue
 				}
 				_ = s.observeLiveSnapshot(filtered)
-				return
 			}
 		}
 	}()
@@ -200,6 +208,7 @@ func (s *persistentToolSession) observeLiveSnapshot(snapshot downstream.ToolSnap
 		if err != nil {
 			return err
 		}
+		s.setEffectiveTools(effective)
 		if err := markSemanticToolChange(ctx, s.catalog, s.tracker, s.entry, effective.Fingerprint); err != nil {
 			return err
 		}
